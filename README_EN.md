@@ -15,7 +15,7 @@ A modern installation tool based on Fluent Design, providing a beautiful user in
 
 ![](https://pub-141831e61e69445289222976a15b6fb3.r2.dev/Image_to_url_V2/-----2026-03-15-142325-imagetourl.cloud-1773555817783-iu0hay.png)
 
-![](https://pub-141831e61e69445289222976a15b6fb3.r2.dev/Image_to_url_V2/-----2026-03-14-185223-imagetourl.cloud-1773495242612-q11k2h.png)
+![](https://pub-141831e61e69445289222976a15b6fb3.r2.dev/Image_to_url_V2/-----2026-03-15-144111-imagetourl.cloud-1773556925932-gkvose.png)
 
 ![https://pub-141831e61e69445289222976a15b6fb3.r2.dev/Image_to_url_V2/-----2026-03-08-205522-imagetourl.cloud-1772974647358-0kx1je.png](https://pub-141831e61e69445289222976a15b6fb3.r2.dev/Image_to_url_V2/-----2026-03-15-142325-imagetourl.cloud-1773555979061-852mv3.png)
 

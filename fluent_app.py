@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Optional
 from PyQt6.QtCore import Qt, QSize, pyqtSignal, QThread, pyqtSlot, QUrl, QLocale, QTranslator
 from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel
-from PyQt6.QtGui import QIcon, QPixmap
+from PyQt6.QtGui import QIcon, QPixmap, QFont
 from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
 from qfluentwidgets import (
     FluentIcon, NavigationItemPosition, MessageBox,
@@ -19,7 +19,7 @@ from qfluentwidgets import (
     InfoBarPosition, CardWidget, ScrollArea, CaptionLabel,
     TransparentToolButton, IconWidget, FlowLayout, SearchLineEdit,
     PrimaryPushButton, CheckBox, GroupHeaderCardWidget, InfoBarIcon,
-    SpinBox
+    SpinBox, HyperlinkButton
 )
 
 # 导入后端
@@ -230,7 +230,7 @@ TEXTS = {
         "about_title": "关于",
         "thanks_title": "鸣谢",
         "about_text": "Cai Install - Fluent Design 版本\n\n版本: 1.3\n\n这是一个基于 PyQt6-Fluent-Widgets 的现代化 Steam 游戏解锁工具。\n\n功能特性:\n• Fluent Design 设计风格\n• 支持多种清单源\n• 游戏搜索和入库\n• 已入库游戏管理\n• 主题自定义\n\n项目地址: https://github.com/zhouchentao666/Cai-install-Fluent-GUI",
-        "thanks_text": "特别鸣谢\n\n开发者:\n• zhouchentao666 - 制作人员\n\n开源项目:\n• PyQt6 - Qt6 Python 绑定\n• PyQt-Fluent-Widgets - Fluent Design 组件库\n• Cai-install-Web-GUI - 原始项目作者\n• httpx - 异步 HTTP 客户端\n\n清单源提供:\n• SWA V2\n• Cysaw\n• Furcate\n• Walftech\n• steamdatabase\n• SteamAutoCracks\n• Sudama\n• 清单不求人\n\n感谢所有为本项目做出贡献的开发者和用户！",
+        "thanks_text": "特别鸣谢\n\n开发者:\n• zhouchentao666 - 制作人员\n\n开源项目:\n• PyQt6 - Qt6 Python 绑定\n• PyQt-Fluent-Widgets - Fluent Design 组件库\n• Cai-install-Web-GUI - 原始项目作者\n• httpx - 异步 HTTP 客户端\n\n清单源提供:\n• SWA V2\n• Cysaw\n• Furcate\n• Walftech\n• steamdatabase\n• SteamAutoCracks\n• Sudama\n• 清单不求人\n\n社区与联系:\n• GitHub: https://github.com/zhouchentao666/Fluent-Install\n• 加入 Q 群: https://qm.qq.com/q/gtTLap5Jw4\n• TG 群组: https://t.me/+vTrqXKpRJE9kNmVl\n• TG 频道: https://t.me/FluentInstall\n• Discord: https://discord.gg/2qh68QRMuA\n\n感谢所有为本项目做出贡献的开发者和用户！",
     },
     "en_US": {
         "app_title": "FluentInstall",
@@ -1039,6 +1039,31 @@ def set_language(lang):
         current_language = lang
 
 
+def safe_set_font_size(widget, size):
+    """安全设置字体大小，避免负数或零值"""
+    if size <= 0:
+        size = 9  # 默认字体大小
+    font = widget.font()
+    font.setPointSize(size)
+    widget.setFont(font)
+
+class SafeFlowLayout(FlowLayout):
+    """安全的FlowLayout，修复takeAt方法的问题"""
+    
+    def takeAt(self, index):
+        """重写takeAt方法，确保返回QLayoutItem而不是QWidget"""
+        if index >= 0 and index < self.count():
+            item = super().takeAt(index)
+            # 确保返回的是QLayoutItem，如果返回的是QWidget，则包装它
+            if hasattr(item, 'widget'):
+                return item
+            elif hasattr(item, 'deleteLater'):  # 这是一个QWidget
+                # 创建一个新的QLayoutItem来包装这个widget
+                from PyQt6.QtWidgets import QWidgetItem
+                return QWidgetItem(item)
+            return item
+        return None
+
 class GameCard(CardWidget):
     """游戏卡片组件"""
     
@@ -1333,7 +1358,7 @@ class HomePage(ScrollArea):
         self.list_layout.setSpacing(10)
         
         # 卡片视图使用网格布局
-        self.grid_layout = FlowLayout()
+        self.grid_layout = SafeFlowLayout()
         self.grid_layout.setContentsMargins(0, 0, 0, 0)
         self.grid_layout.setSpacing(15)
         
@@ -1410,8 +1435,9 @@ class HomePage(ScrollArea):
     def on_games_loaded(self, files_data):
         """游戏加载完成"""
         try:
-            # 清空现有卡片
+            # 清空现有卡片（先从布局移除再销毁）
             for card in self.game_cards:
+                self.card_layout.removeWidget(card)
                 card.deleteLater()
             self.game_cards.clear()
             
@@ -1441,8 +1467,9 @@ class HomePage(ScrollArea):
     
     def display_games(self, games_data):
         """显示游戏列表"""
-        # 清空现有卡片
+        # 清空现有卡片（先从布局移除再销毁，避免布局状态混乱导致图片不显示）
         for card in self.game_cards:
+            self.card_layout.removeWidget(card)
             card.deleteLater()
         self.game_cards.clear()
         
@@ -1493,9 +1520,17 @@ class HomePage(ScrollArea):
         # 保存当前过滤状态
         current_filter = self.filter_input.text()
         
+        # 先清空现有卡片，避免布局问题
+        for card in self.game_cards:
+            if hasattr(self, 'card_layout') and self.card_layout:
+                self.card_layout.removeWidget(card)
+            card.deleteLater()
+        self.game_cards.clear()
+        
         # 移除现有容器
-        self.mainLayout.removeWidget(self.card_container)
-        self.card_container.deleteLater()
+        if hasattr(self, 'card_container') and self.card_container:
+            self.mainLayout.removeWidget(self.card_container)
+            self.card_container.deleteLater()
         
         # 创建新的容器和布局
         self.card_container = QWidget(self)
@@ -1509,7 +1544,7 @@ class HomePage(ScrollArea):
             self.card_container.setLayout(self.list_layout)
         else:  # 卡片视图
             self.current_view_mode = "grid"
-            self.grid_layout = FlowLayout()  # 创建新布局
+            self.grid_layout = SafeFlowLayout()  # 创建新布局
             self.grid_layout.setContentsMargins(0, 0, 0, 0)
             self.grid_layout.setSpacing(15)
             self.card_layout = self.grid_layout
@@ -1722,6 +1757,38 @@ class HomePage(ScrollArea):
                 
         except Exception as e:
             print(f"加载排序模式偏好失败: {e}")
+    
+    def save_sort_mode_preference(self):
+        """保存排序模式设置"""
+        try:
+            config_path = Path.cwd() / 'config.json'
+            import json
+            
+            # 读取现有配置
+            if config_path.exists():
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+            else:
+                config = {}
+            
+            # 获取当前排序模式
+            current_index = self.sort_combo.currentIndex()
+            if current_index == 1:
+                sort_mode = "az"
+            elif current_index == 2:
+                sort_mode = "za"
+            else:
+                sort_mode = "default"
+            
+            # 保存排序模式
+            config["home_sort_mode"] = sort_mode
+            
+            # 写入配置
+            with open(config_path, 'w', encoding='utf-8') as f:
+                json.dump(config, f, indent=2, ensure_ascii=False)
+                
+        except Exception as e:
+            print(f"保存排序模式偏好失败: {e}")
     
     @pyqtSlot(str)
     def on_load_error(self, error):
@@ -1993,7 +2060,7 @@ class SearchPage(ScrollArea):
         self.list_results_layout.setSpacing(10)
         
         # 卡片视图使用网格布局
-        self.grid_results_layout = FlowLayout()
+        self.grid_results_layout = SafeFlowLayout()
         self.grid_results_layout.setContentsMargins(0, 0, 0, 0)
         self.grid_results_layout.setSpacing(15)
         
@@ -2483,9 +2550,17 @@ class SearchPage(ScrollArea):
         # 保存当前搜索结果
         current_results = self.search_results.copy() if self.search_results else []
         
+        # 先清空现有卡片，避免布局问题
+        for card in self.result_cards:
+            if hasattr(self, 'results_layout') and self.results_layout:
+                self.results_layout.removeWidget(card)
+            card.deleteLater()
+        self.result_cards.clear()
+        
         # 移除现有容器
-        self.main_layout.removeWidget(self.results_container)
-        self.results_container.deleteLater()
+        if hasattr(self, 'results_container') and self.results_container:
+            self.main_layout.removeWidget(self.results_container)
+            self.results_container.deleteLater()
         
         # 创建新的容器和布局
         self.results_container = QWidget(self)
@@ -2499,7 +2574,7 @@ class SearchPage(ScrollArea):
             self.results_container.setLayout(self.list_results_layout)
         else:  # 卡片视图
             self.current_view_mode = "grid"
-            self.grid_results_layout = FlowLayout()  # 创建新布局
+            self.grid_results_layout = SafeFlowLayout()  # 创建新布局
             self.grid_results_layout.setContentsMargins(0, 0, 0, 0)
             self.grid_results_layout.setSpacing(15)
             self.results_layout = self.grid_results_layout
@@ -2523,6 +2598,38 @@ class SearchPage(ScrollArea):
         # 重新显示搜索结果
         if self.search_results:
             self.display_search_results(self.search_results)
+    
+    def save_sort_mode_preference(self):
+        """保存排序模式设置"""
+        try:
+            config_path = Path.cwd() / 'config.json'
+            import json
+            
+            # 读取现有配置
+            if config_path.exists():
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+            else:
+                config = {}
+            
+            # 获取当前排序模式
+            current_index = self.sort_combo.currentIndex()
+            if current_index == 1:
+                sort_mode = "az"
+            elif current_index == 2:
+                sort_mode = "za"
+            else:
+                sort_mode = "default"
+            
+            # 保存排序模式
+            config["search_sort_mode"] = sort_mode
+            
+            # 写入配置
+            with open(config_path, 'w', encoding='utf-8') as f:
+                json.dump(config, f, indent=2, ensure_ascii=False)
+                
+        except Exception as e:
+            print(f"保存搜索排序模式偏好失败: {e}")
     
     @pyqtSlot(str)
     def on_search_error(self, error):
@@ -2855,6 +2962,26 @@ class SettingsPage(ScrollArea):
         self.thanks_btn.setFixedWidth(100)
         button_layout.addWidget(self.thanks_btn)
         
+        self.github_btn = HyperlinkButton("https://github.com/zhouchentao666/Fluent-Install", "GitHub")
+        self.github_btn.setFixedWidth(80)
+        button_layout.addWidget(self.github_btn)
+        
+        self.qq_btn = HyperlinkButton("https://qm.qq.com/q/gtTLap5Jw4", "Q群")
+        self.qq_btn.setFixedWidth(60)
+        button_layout.addWidget(self.qq_btn)
+        
+        self.tg_group_btn = HyperlinkButton("https://t.me/+vTrqXKpRJE9kNmVl", "TG群组")
+        self.tg_group_btn.setFixedWidth(75)
+        button_layout.addWidget(self.tg_group_btn)
+        
+        self.tg_channel_btn = HyperlinkButton("https://t.me/FluentInstall", "TG频道")
+        self.tg_channel_btn.setFixedWidth(75)
+        button_layout.addWidget(self.tg_channel_btn)
+        
+        self.discord_btn = HyperlinkButton("https://discord.gg/2qh68QRMuA", "Discord")
+        self.discord_btn.setFixedWidth(80)
+        button_layout.addWidget(self.discord_btn)
+        
         button_layout.addStretch(1)
         layout.addLayout(button_layout)
     
@@ -3075,6 +3202,13 @@ class SettingsPage(ScrollArea):
 • SteamAutoCracks
 • Sudama
 • 清单不求人
+
+社区与联系:
+• GitHub: https://github.com/zhouchentao666/Fluent-Install
+• 加入 Q 群: https://qm.qq.com/q/gtTLap5Jw4
+• TG 群组: https://t.me/+vTrqXKpRJE9kNmVl
+• TG 频道: https://t.me/FluentInstall
+• Discord: https://discord.gg/2qh68QRMuA
 
 感谢所有为本项目做出贡献的开发者和用户！"""
         
