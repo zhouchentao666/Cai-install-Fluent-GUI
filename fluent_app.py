@@ -246,7 +246,7 @@ TEXTS = {
         "reset_to_default": "重置为默认",
         "about_title": "关于",
         "thanks_title": "鸣谢",
-        "about_text": "Cai Install - Fluent Design 版本\n\n版本: 1.5\n\n这是一个基于 PyQt6-Fluent-Widgets 的现代化 Steam 游戏解锁工具。\n\n功能特性:\n• Fluent Design 设计风格\n• 支持多种清单源\n• 游戏搜索和入库\n• 已入库游戏管理\n• 主题自定义\n\n项目地址: https://github.com/zhouchentao666/Cai-install-Fluent-GUI",
+        "about_text": "Cai Install - Fluent Design 版本\n\n版本: 1.6\n\n这是一个基于 PyQt6-Fluent-Widgets 的现代化 Steam 游戏解锁工具。\n\n功能特性:\n• Fluent Design 设计风格\n• 支持多种清单源\n• 游戏搜索和入库\n• 已入库游戏管理\n• 主题自定义\n\n项目地址: https://github.com/zhouchentao666/Cai-install-Fluent-GUI",
         "thanks_text": "特别鸣谢\n\n开发者:\n• zhouchentao666 - 制作人员\n\n开源项目:\n• PyQt6 - Qt6 Python 绑定\n• PyQt-Fluent-Widgets - Fluent Design 组件库\n• Cai-install-Web-GUI - 原始项目作者\n• httpx - 异步 HTTP 客户端\n\n清单源提供:\n• SWA V2\n• Cysaw\n• Furcate\n• Walftech\n• steamdatabase\n• SteamAutoCracks\n• Sudama\n• 清单不求人\n\n社区与联系:\n• GitHub: https://github.com/zhouchentao666/Fluent-Install\n• 加入 Q 群: https://qm.qq.com/q/gtTLap5Jw4\n• TG 群组: https://t.me/+vTrqXKpRJE9kNmVl\n• TG 频道: https://t.me/FluentInstall\n• Discord: https://discord.gg/2qh68QRMuA\n\n感谢所有为本项目做出贡献的开发者和用户！",
         "donate": "捐赠",
         "donate_title": "支持开发者",
@@ -388,7 +388,7 @@ TEXTS = {
         "reset_to_default": "Reset Default",
         "about_title": "About",
         "thanks_title": "Credits",
-        "about_text": "Cai Install - Fluent Design Version\n\nVersion: 1.5\n\nThis is a modern Steam game unlocking tool based on PyQt6-Fluent-Widgets.\n\nFeatures:\n• Fluent Design style\n• Support for multiple manifest sources\n• Game search and adding\n• Installed games management\n• Theme customization\n\nProject URL: https://github.com/zhouchentao666/Cai-install-Fluent-GUI",
+        "about_text": "Cai Install - Fluent Design Version\n\nVersion: 1.6\n\nThis is a modern Steam game unlocking tool based on PyQt6-Fluent-Widgets.\n\nFeatures:\n• Fluent Design style\n• Support for multiple manifest sources\n• Game search and adding\n• Installed games management\n• Theme customization\n\nProject URL: https://github.com/zhouchentao666/Cai-install-Fluent-GUI",
         "thanks_text": "Special Thanks\n\nDevelopers:\n• zhouchentao666 - Developer\n\nOpen Source Projects:\n• PyQt6 - Qt6 Python Bindings\n• PyQt-Fluent-Widgets - Fluent Design Component Library\n• Cai-install-Web-GUI - Original Project Author\n• httpx - Async HTTP Client\n\nManifest Sources:\n• SWA V2\n• Cysaw\n• Furcate\n• Walftech\n• steamdatabase\n• SteamAutoCracks\n• Sudama\n• Manifest Helper Library\n\nThanks to all developers and users who contributed to this project!",
         "donate": "Donate",
         "donate_title": "Support the Developer",
@@ -537,7 +537,7 @@ TEXTS = {
         "reset_to_default": "Réinitialiser par défaut",
         "about_title": "À propos",
         "thanks_title": "Crédits",
-        "about_text": "Cai Install - Version Fluent Design\n\nVersion: 1.5\n\nCeci est un outil de déverrouillage de jeu Steam moderne basé sur PyQt6-Fluent-Widgets.\n\nFonctionnalités:\n• Style Fluent Design\n• Support de plusieurs sources de manifestes\n• Recherche et ajout de jeux\n• Gestion des jeux installés\n• Personnalisation du thème\n\nURL du projet: https://github.com/zhouchentao666/Cai-install-Fluent-GUI",
+        "about_text": "Cai Install - Version Fluent Design\n\nVersion: 1.6\n\nCeci est un outil de déverrouillage de jeu Steam moderne basé sur PyQt6-Fluent-Widgets.\n\nFonctionnalités:\n• Style Fluent Design\n• Support de plusieurs sources de manifestes\n• Recherche et ajout de jeux\n• Gestion des jeux installés\n• Personnalisation du thème\n\nURL du projet: https://github.com/zhouchentao666/Cai-install-Fluent-GUI",
         "thanks_text": "Remerciements spéciaux\n\nDéveloppeurs:\n• zhouchentao666 - Développeur\n\nProjets open source:\n• PyQt6 - Bindings Python Qt6\n• PyQt-Fluent-Widgets - Bibliothèque de composants Fluent Design\n• Cai-install-Web-GUI - Auteur du projet original\n• httpx - Client HTTP asynchrone\n\nSources de manifestes:\n• SWA V2\n• Cysaw\n• Furcate\n• Walftech\n• steamdatabase\n• SteamAutoCracks\n• Sudama\n• Bibliothèque d'aide de manifeste\n\nMerci à tous les développeurs et utilisateurs qui ont contribué à ce projet!",
         "donate": "Faire un don",
         "donate_title": "Soutenir le développeur",
@@ -686,7 +686,7 @@ TEXTS = {
         "reset_to_default": "Сбросить по умолчанию",
         "about_title": "О программе",
         "thanks_title": "Благодарности",
-        "about_text": "Cai Install - Версия Fluent Design\n\nВерсия: 1.5\n\nЭто современный инструмент разблокировки игр Steam на основе PyQt6-Fluent-Widgets.\n\nФункции:\n• Стиль Fluent Design\n• Поддержка нескольких источников манифестов\n• Поиск и добавление игр\n• Управление установленными играми\n• Настройка темы\n\nURL проекта: https://github.com/zhouchentao666/Cai-install-Fluent-GUI",
+        "about_text": "Cai Install - Версия Fluent Design\n\nВерсия: 1.6\n\nЭто современный инструмент разблокировки игр Steam на основе PyQt6-Fluent-Widgets.\n\nФункции:\n• Стиль Fluent Design\n• Поддержка нескольких источников манифестов\n• Поиск и добавление игр\n• Управление установленными играми\n• Настройка темы\n\nURL проекта: https://github.com/zhouchentao666/Cai-install-Fluent-GUI",
         "thanks_text": "Особая благодарность\n\nРазработчики:\n• zhouchentao666 - Разработчик\n\nПроекты с открытым исходным кодом:\n• PyQt6 - Привязки Python Qt6\n• PyQt-Fluent-Widgets - Библиотека компонентов Fluent Design\n• Cai-install-Web-GUI - Автор оригинального проекта\n• httpx - Асинхронный HTTP клиент\n\nИсточники манифестов:\n• SWA V2\n• Cysaw\n• Furcate\n• Walftech\n• steamdatabase\n• SteamAutoCracks\n• Sudama\n• Библиотека помощи манифеста\n\nСпасибо всем разработчикам и пользователям, внесшим вклад в этот проект!",
         "donate": "Пожертвовать",
         "donate_title": "Поддержать разработчика",
@@ -835,7 +835,7 @@ TEXTS = {
         "reset_to_default": "Auf Standard zurücksetzen",
         "about_title": "Über",
         "thanks_title": "Danksagungen",
-        "about_text": "Cai Install - Fluent Design Version\n\nVersion: \n1.5\nDies ist ein modernes Steam-Spiel-Unlocking-Tool basierend auf PyQt6-Fluent-Widgets.\n\nFunktionen:\n• Fluent Design Stil\n• Unterstützung für mehrere Manifest-Quellen\n• Spielsuche und -hinzufügen\n• Verwaltung installierter Spiele\n• Themen-Anpassung\n\nProjekt-URL: https://github.com/zhouchentao666/Cai-install-Fluent-GUI",
+        "about_text": "Cai Install - Fluent Design Version\n\nVersion: \n1.6\nDies ist ein modernes Steam-Spiel-Unlocking-Tool basierend auf PyQt6-Fluent-Widgets.\n\nFunktionen:\n• Fluent Design Stil\n• Unterstützung für mehrere Manifest-Quellen\n• Spielsuche und -hinzufügen\n• Verwaltung installierter Spiele\n• Themen-Anpassung\n\nProjekt-URL: https://github.com/zhouchentao666/Cai-install-Fluent-GUI",
         "thanks_text": "Besondere Danksagung\n\nEntwickler:\n• zhouchentao666 - Entwickler\n\nOpen-Source-Projekte:\n• PyQt6 - Qt6 Python Bindings\n• PyQt-Fluent-Widgets - Fluent Design Komponentenbibliothek\n• Cai-install-Web-GUI - Originalprojekt-Autor\n• httpx - Asynchroner HTTP-Client\n\nManifest-Quellen:\n• SWA V2\n• Cysaw\n• Furcate\n• Walftech\n• steamdatabase\n• SteamAutoCracks\n• Sudama\n• Manifest-Hilfsbibliothek\n\nVielen Dank an alle Entwickler und Benutzer, die zu diesem Projekt beigetragen haben!",
         "donate": "Spenden",
         "donate_title": "Entwickler unterstützen",
@@ -984,7 +984,7 @@ TEXTS = {
         "reset_to_default": "デフォルトにリセット",
         "about_title": "について",
         "thanks_title": "謝辞",
-        "about_text": "Cai Install - Fluent Design バージョン\n\nバージョン: 1.5\n\nこれはPyQt6-Fluent-WidgetsをベースにしたモダンなSteamゲームアンロックツールです。\n\n機能:\n• Fluent Designスタイル\n• 複数のマニフェストソースをサポート\n• ゲーム検索と追加\n• インストール済みゲームの管理\n• テーマカスタマイズ\n\nプロジェクトURL: https://github.com/zhouchentao666/Cai-install-Fluent-GUI",
+        "about_text": "Cai Install - Fluent Design バージョン\n\nバージョン: 1.6\n\nこれはPyQt6-Fluent-WidgetsをベースにしたモダンなSteamゲームアンロックツールです。\n\n機能:\n• Fluent Designスタイル\n• 複数のマニフェストソースをサポート\n• ゲーム検索と追加\n• インストール済みゲームの管理\n• テーマカスタマイズ\n\nプロジェクトURL: https://github.com/zhouchentao666/Cai-install-Fluent-GUI",
         "thanks_text": "特別な感謝\n\n開発者:\n• zhouchentao666 - 開発者\n\nオープンソースプロジェクト:\n• PyQt6 - Qt6 Pythonバインディング\n• PyQt-Fluent-Widgets - Fluent Designコンポーネントライブラリ\n• Cai-install-Web-GUI - オリジナルプロジェクト作成者\n• httpx - 非同期HTTPクライアント\n\nマニフェストソース:\n• SWA V2\n• Cysaw\n• Furcate\n• Walftech\n• steamdatabase\n• SteamAutoCracks\n• Sudama\n• マニフェストヘルパーライブラリ\n\nこのプロジェクトに貢献してくれたすべての開発者とユーザーの皆様に感謝します！",
         "donate": "寄付",
         "donate_title": "開発者を支援",
@@ -1142,7 +1142,7 @@ TEXTS = {
         "reset_to_default": "重設為預設",
         "about_title": "關於",
         "thanks_title": "感謝",
-        "about_text": "Cai Install - Fluent Design 版本\n\n版本: 1.5\n\n這是一套基於 PyQt6-Fluent-Widgets 的現代化 Steam 遊戲解鎖工具。\n\n功能特色:\n• Fluent Design 設計風格\n• 支援多種清單來源\n• 遊戲搜尋與入库\n• 已入库遊戲管理\n• 佈景主題自訂\n\n專案位址: https://github.com/zhouchentao666/Cai-install-Fluent-GUI",
+        "about_text": "Cai Install - Fluent Design 版本\n\n版本: 1.6\n\n這是一套基於 PyQt6-Fluent-Widgets 的現代化 Steam 遊戲解鎖工具。\n\n功能特色:\n• Fluent Design 設計風格\n• 支援多種清單來源\n• 遊戲搜尋與入库\n• 已入库遊戲管理\n• 佈景主題自訂\n\n專案位址: https://github.com/zhouchentao666/Cai-install-Fluent-GUI",
         "thanks_text": "特別感謝\n\n開發者:\n• zhouchentao666 - 製作人員\n\n開源專案:\n• PyQt6 - Qt6 Python 綁定\n• PyQt-Fluent-Widgets - Fluent Design 元件庫\n• Cai-install-Web-GUI - 原始專案作者\n• httpx - 非同步 HTTP 用戶端\n\n清單來源提供:\n• SWA V2\n• Cysaw\n• Furcate\n• Walftech\n• steamdatabase\n• SteamAutoCracks\n• Sudama\n• 清單不求人\n\n感謝所有為本專案貢獻的開發者與使用者！",
         "donate": "捐贈",
         "donate_title": "支持開發者",
@@ -1244,6 +1244,30 @@ for _lang, _keys in _LAUNCHER_TEXTS.items():
 for _lang in TEXTS:
     if _lang not in _LAUNCHER_TEXTS:
         TEXTS[_lang].update(_LAUNCHER_TEXTS["zh_CN"])
+
+# ===== 游戏推荐翻译键 =====
+_EXTRA_TEXTS = {
+    "zh_CN": {
+        "recommended_games": "热门游戏推荐",
+        "recommended_hint": "以下为 Steam 热门游戏，点击可直接入库",
+        "loading_recommendations": "正在加载推荐...",
+        "recommendations_failed": "加载推荐失败",
+        "show_more": "显示更多",
+    },
+    "en_US": {
+        "recommended_games": "Popular Game Recommendations",
+        "recommended_hint": "Top Steam games below, click to add to library",
+        "loading_recommendations": "Loading recommendations...",
+        "recommendations_failed": "Failed to load recommendations",
+        "show_more": "Show More",
+    },
+}
+for _lang, _keys in _EXTRA_TEXTS.items():
+    if _lang in TEXTS:
+        TEXTS[_lang].update(_keys)
+for _lang in TEXTS:
+    if _lang not in _EXTRA_TEXTS:
+        TEXTS[_lang].update(_EXTRA_TEXTS["zh_CN"])
 
 # 全局语言变量
 current_language = "zh_CN"
@@ -1929,13 +1953,13 @@ class HomePage(ScrollArea):
         # 加载视图和排序设置（仅同步 combo UI，布局已在上方设置）
         self.load_view_mode_preference()
         self.load_sort_mode_preference()
+
+        # 启动时立即加载游戏列表
+        self.load_games()
     
     def showEvent(self, event):
-        """页面显示时加载游戏列表"""
+        """页面显示时不再重复加载"""
         super().showEvent(event)
-        if not self._games_loaded:
-            self._games_loaded = True
-            self.load_games()
     
     def load_games(self):
         """加载游戏列表"""
@@ -2633,7 +2657,9 @@ class SearchPage(ScrollArea):
             "Walftech",
             "SteamDatabase",
             "Sudama",
-            "清单不求人"
+            "清单不求人",
+            tr("github_auiowu"),
+            tr("github_sac"),
         ])
         self.manifest_source_combo.setCurrentIndex(0)  # 默认自动选择
         self.manifest_source_combo.setFixedWidth(200)
@@ -2690,6 +2716,11 @@ class SearchPage(ScrollArea):
         self.unlock_worker = None
         self.result_cards = []
         self.search_results = []  # 存储搜索结果用于排序
+        self._rec_label = None
+        self._rec_worker = None
+        self._rec_games = []  # 缓存推荐游戏数据
+        self._rec_shown = 0
+        self._show_more_btn = None
         
         # 加载保存的清单源选择
         self.load_manifest_source_preference()
@@ -2851,7 +2882,9 @@ class SearchPage(ScrollArea):
                 6: "walftech",
                 7: "steamdatabase",
                 8: "sudama",
-                9: "buqiuren"
+                9: "buqiuren",
+                10: "github_auiowu",
+                11: "github_sac",
             }
             config["default_manifest_source"] = source_mapping.get(self.manifest_source_combo.currentIndex(), "auto")
             
@@ -2910,7 +2943,9 @@ class SearchPage(ScrollArea):
                     "walftech": 6,
                     "steamdatabase": 7,
                     "sudama": 8,
-                    "buqiuren": 9
+                    "buqiuren": 9,
+                    "github_auiowu": 10,
+                    "github_sac": 11,
                 }
                 
                 index = source_mapping.get(saved_source, 0)
@@ -3020,13 +3055,136 @@ class SearchPage(ScrollArea):
         except Exception as e:
             print(f"加载排序模式偏好失败: {e}")
     
+    def showEvent(self, event):
+        """页面显示时加载推荐"""
+        super().showEvent(event)
+        if not self.search_results and not self.search_input.text().strip():
+            self._load_recommendations()
+
+    def _load_recommendations(self):
+        """加载热门游戏推荐"""
+        # 清空现有卡片
+        for card in self.result_cards:
+            card.deleteLater()
+        self.result_cards.clear()
+
+        # 显示推荐标题标签
+        if not hasattr(self, '_rec_label') or self._rec_label is None:
+            from qfluentwidgets import CaptionLabel
+            self._rec_label = CaptionLabel(tr("recommended_hint"), self)
+            self._rec_label.setTextColor("#606060", "#d2d2d2")
+            self.main_layout.insertWidget(3, self._rec_label)
+        self._rec_label.setText(tr("loading_recommendations"))
+        self._rec_label.show()
+
+        async def _fetch():
+            try:
+                async with CaiBackend() as backend:
+                    r = await backend.client.get(
+                        "https://store.steampowered.com/api/featuredcategories",
+                        params={"cc": "cn", "l": "schinese"},
+                        timeout=15
+                    )
+                    data = r.json()
+                    games = []
+                    for section in ["top_sellers", "new_releases", "specials"]:
+                        items = data.get(section, {}).get("items", [])
+                        for item in items:
+                            appid = str(item.get("id", ""))
+                            name = item.get("name", "")
+                            if appid and name and not any(g["appid"] == appid for g in games):
+                                games.append({"appid": appid, "name": name})
+                    return games
+            except Exception:
+                return []
+
+        if hasattr(self, '_rec_worker') and self._rec_worker and self._rec_worker.isRunning():
+            return
+        self._rec_worker = AsyncWorker(_fetch())
+        self._rec_worker.result_ready.connect(self._on_recommendations_loaded)
+        self._rec_worker.error.connect(lambda e: self._rec_label.setText(tr("recommendations_failed")) if self._rec_label else None)
+        self._rec_worker.finished.connect(self._rec_worker.deleteLater)
+        self._rec_worker.start()
+
+    def _on_recommendations_loaded(self, games):
+        """推荐加载完成"""
+        self._rec_worker = None
+        if not games:
+            if hasattr(self, '_rec_label') and self._rec_label:
+                self._rec_label.setText(tr("recommendations_failed"))
+            return
+        if hasattr(self, '_rec_label') and self._rec_label:
+            self._rec_label.setText(tr("recommended_hint"))
+        # 缓存推荐数据
+        self._rec_games = games
+        self._rec_shown = 0
+        # 只在没有搜索结果时显示推荐
+        if not self.search_results:
+            self._render_recommendations()
+
+    def _render_recommendations(self):
+        """将缓存的推荐数据渲染到当前布局"""
+        # 清空现有卡片和"显示更多"按钮
+        for card in self.result_cards:
+            card.deleteLater()
+        self.result_cards.clear()
+        if hasattr(self, '_show_more_btn') and self._show_more_btn:
+            self._show_more_btn.deleteLater()
+            self._show_more_btn = None
+
+        self._rec_shown = 0
+        self._append_recommendations(20)
+
+    def _append_recommendations(self, count):
+        """追加显示 count 个推荐游戏"""
+        games = getattr(self, '_rec_games', [])
+        start = self._rec_shown
+        end = min(start + count, len(games))
+
+        for game in games[start:end]:
+            if self.current_view_mode == "grid":
+                card = SearchResultCardGrid(game["appid"], game["name"], self)
+            else:
+                card = SearchResultCard(game["appid"], game["name"], self)
+            self.results_layout.addWidget(card)
+            self.result_cards.append(card)
+
+        self._rec_shown = end
+
+        # 移除旧的"显示更多"按钮（如果有）
+        if hasattr(self, '_show_more_btn') and self._show_more_btn:
+            self._show_more_btn.deleteLater()
+            self._show_more_btn = None
+
+        # 如果还有更多，添加"显示更多"按钮
+        if self._rec_shown < len(games):
+            btn = PushButton(tr("show_more"), self)
+            btn.setFixedWidth(160)
+            btn.clicked.connect(lambda: self._append_recommendations(20))
+            wrapper = QWidget(self)
+            wrapper_layout = QHBoxLayout(wrapper)
+            wrapper_layout.setContentsMargins(0, 4, 0, 4)
+            wrapper_layout.addStretch(1)
+            wrapper_layout.addWidget(btn)
+            wrapper_layout.addStretch(1)
+            self._show_more_btn = wrapper
+            self.results_layout.addWidget(wrapper)
+        else:
+            self._show_more_btn = None
+
     def on_search(self):
         """搜索游戏"""
         query = self.search_input.text().strip()
+        # 清掉"显示更多"按钮
+        if hasattr(self, '_show_more_btn') and self._show_more_btn:
+            self._show_more_btn.deleteLater()
+            self._show_more_btn = None
         if not query:
             for card in self.result_cards:
                 card.deleteLater()
             self.result_cards.clear()
+            self.search_results = []
+            self._load_recommendations()
             return
         
         # 清空之前的结果卡片
@@ -3109,6 +3267,9 @@ class SearchPage(ScrollArea):
     
     def display_search_results(self, results):
         """显示搜索结果"""
+        # 隐藏推荐标签
+        if hasattr(self, '_rec_label') and self._rec_label:
+            self._rec_label.hide()
         # 清空现有卡片
         for card in self.result_cards:
             card.deleteLater()
@@ -3178,24 +3339,29 @@ class SearchPage(ScrollArea):
             self.results_layout = self.grid_results_layout
             self.results_container.setLayout(self.grid_results_layout)
         
-        # 重新添加到布局（title=0, search_row=1, options=2, results=3）
-        self.main_layout.insertWidget(3, self.results_container)
+        # 重新添加到布局（title=0, search_row=1, options=2, [rec_label=3], results=3 or 4）
+        insert_idx = 4 if (hasattr(self, '_rec_label') and self._rec_label and self._rec_label.isVisible()) else 3
+        self.main_layout.insertWidget(insert_idx, self.results_container)
         
         # 保存视图模式偏好
         self.save_view_mode_preference()
         
-        # 重新显示搜索结果
+        # 重新显示搜索结果或推荐
         if current_results:
             self.display_search_results(current_results)
+        elif not self.search_results and self._rec_games:
+            self._render_recommendations()
     
     def on_sort_changed(self):
         """排序方式改变"""
         # 保存排序模式偏好
         self.save_sort_mode_preference()
         
-        # 重新显示搜索结果
+        # 重新显示搜索结果或推荐
         if self.search_results:
             self.display_search_results(self.search_results)
+        elif self._rec_games:
+            self._render_recommendations()
     
     def save_sort_mode_preference(self):
         """保存排序模式设置"""
@@ -3276,7 +3442,9 @@ class SearchPage(ScrollArea):
             "Walftech": "walftech",
             "SteamDatabase": "steamdatabase",
             "Sudama": "sudama",
-            "清单不求人": "buqiuren"
+            "清单不求人": "buqiuren",
+            tr("github_auiowu"): "Auiowu/ManifestAutoUpdate",
+            tr("github_sac"): "SteamAutoCracks/ManifestHub",
         }
         selected_source = self.manifest_source_combo.currentText()
         tool_type = source_mapping.get(selected_source, "auto")
@@ -4167,7 +4335,7 @@ class SettingsPage(ScrollArea):
         """显示关于对话框"""
         about_text = """Cai Install - Fluent Design 版本
 
-版本: 1.5
+版本: 1.6
 
 这是一个基于 PyQt6-Fluent-Widgets 的现代化 Steam 游戏解锁工具。
 
@@ -4293,17 +4461,19 @@ class SettingsPage(ScrollArea):
         dialog.exec()
     
     def load_config(self):
-        """加载配置"""
-        async def _load():
-            async with CaiBackend() as backend:
-                config = await backend.load_config()
-                return config
-        
-        self.worker = AsyncWorker(_load())
-        self.worker.result_ready.connect(self.on_config_loaded)
-        self.worker.error.connect(self.on_load_error)
-        self.worker.finished.connect(self.worker.deleteLater)
-        self.worker.start()
+        """加载配置（同步读取本地文件，避免卡顿）"""
+        try:
+            import json as _json
+            config_path = Path.cwd() / 'config.json'
+            if config_path.exists():
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = _json.load(f)
+            else:
+                from backend import DEFAULT_CONFIG
+                config = DEFAULT_CONFIG.copy()
+            self.on_config_loaded(config)
+        except Exception as e:
+            self.on_load_error(str(e))
     
     @pyqtSlot(object)
     def on_config_loaded(self, config):
@@ -4597,6 +4767,8 @@ class SettingsPage(ScrollArea):
             parent=self,
             position=InfoBarPosition.TOP
         )
+
+
 
 
 class MainWindow(MSFluentWindow):
