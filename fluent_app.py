@@ -3614,11 +3614,66 @@ class SearchPage(ScrollArea):
                 
                 return success
         
-        # 确保之前的解锁worker已清理
+        # 检查是否有正在进行的入库任务
         if hasattr(self, 'unlock_worker') and self.unlock_worker and self.unlock_worker.isRunning():
-            self.unlock_worker.quit()
-            self.unlock_worker.wait()
-        
+            from qfluentwidgets import MessageBox
+            msg_box = MessageBox(
+                "入库进行中",
+                f"当前正在处理入库任务，请选择操作：\n\n"
+                f"• 取消入库：停止当前任务\n"
+                f"• 继续入库：等待当前任务完成\n"
+                f"• 换成当前清单入库：停止当前任务并使用新选择的清单源重新入库",
+                self.window()
+            )
+            msg_box.yesButton.setText("换成当前清单入库")
+            msg_box.cancelButton.setText("继续入库")
+            # 添加第三个按钮"取消入库"
+            cancel_btn = PushButton("取消入库", msg_box.buttonGroup)
+            msg_box.buttonLayout.insertWidget(0, cancel_btn, 1)
+            msg_box.buttonGroup.setFixedHeight(81)  # 保持高度不变，三按钮水平排列
+
+            choice = [None]  # 用列表存储选择，避免闭包问题
+
+            def on_cancel_import():
+                choice[0] = "cancel"
+                msg_box.accept()
+
+            cancel_btn.clicked.connect(on_cancel_import)
+
+            result = msg_box.exec()
+
+            if choice[0] == "cancel":
+                # 取消入库：停止当前任务，不启动新任务
+                self.unlock_worker.quit()
+                InfoBar.info(
+                    title="已取消",
+                    content="入库任务已取消",
+                    parent=self.window(),
+                    position=InfoBarPosition.TOP,
+                    duration=2000
+                )
+                return
+            elif result == 0:
+                # 继续入库（cancelButton）：不做任何事
+                return
+            else:
+                # 换成当前清单入库（yesButton）：停止当前任务后启动新任务
+                old_worker = self.unlock_worker
+                self.unlock_worker = None
+
+                def _start_new_after_stop():
+                    new_worker = AsyncWorker(_unlock())
+                    new_worker.result_ready.connect(self.on_unlock_complete)
+                    new_worker.error.connect(self.on_unlock_error)
+                    new_worker.finished.connect(new_worker.deleteLater)
+                    self.unlock_worker = new_worker
+                    new_worker.start()
+
+                old_worker.finished.connect(old_worker.deleteLater)
+                old_worker.finished.connect(_start_new_after_stop)
+                old_worker.quit()
+                return
+
         self.unlock_worker = AsyncWorker(_unlock())
         self.unlock_worker.result_ready.connect(self.on_unlock_complete)
         self.unlock_worker.error.connect(self.on_unlock_error)
@@ -3628,9 +3683,7 @@ class SearchPage(ScrollArea):
     @pyqtSlot(object)
     def on_unlock_complete(self, success):
         """入库完成"""
-        if hasattr(self, 'unlock_worker') and self.unlock_worker:
-            self.unlock_worker.deleteLater()
-            self.unlock_worker = None
+        self.unlock_worker = None
         
         # 始终显示在主窗口，不受当前页面限制
         bar_parent = self.window()
@@ -3655,9 +3708,7 @@ class SearchPage(ScrollArea):
     @pyqtSlot(str)
     def on_unlock_error(self, error):
         """入库失败"""
-        if hasattr(self, 'unlock_worker') and self.unlock_worker:
-            self.unlock_worker.deleteLater()
-            self.unlock_worker = None
+        self.unlock_worker = None
         
         if "Server disconnected" in error or "RemoteProtocolError" in error:
             error_msg = "网络连接失败，服务器断开连接\n\n可能的原因：\n1. 清单源服务器不稳定\n2. 网络连接问题\n\n建议：\n- 尝试切换其他清单源\n- 检查网络连接\n- 稍后重试"
