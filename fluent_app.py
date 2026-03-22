@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Optional
 from PyQt6.QtCore import Qt, QSize, pyqtSignal, QThread, pyqtSlot, QUrl, QLocale, QTranslator, QObject
 from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel
-from PyQt6.QtGui import QIcon, QPixmap, QFont
+from PyQt6.QtGui import QIcon, QPixmap, QFont, QDesktopServices
 from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
 from qfluentwidgets import (
     FluentIcon, NavigationItemPosition, MessageBox,
@@ -20,11 +20,18 @@ from qfluentwidgets import (
     InfoBarPosition, CardWidget, ScrollArea, CaptionLabel,
     TransparentToolButton, IconWidget, FlowLayout, SearchLineEdit,
     PrimaryPushButton, CheckBox, GroupHeaderCardWidget, InfoBarIcon,
-    SpinBox, HyperlinkButton, MessageBoxBase, TitleLabel
+    SpinBox, HyperlinkButton, MessageBoxBase, TitleLabel,
+    RoundMenu, Action
 )
 
 # 导入后端
 from backend import CaiBackend, get_steam_lang
+
+import time as _time
+# 模块级推荐缓存（进程内共享，避免切换页面重复请求）
+_rec_cache: list = []
+_rec_cache_ts: float = 0.0
+_REC_CACHE_TTL = 3600  # 缓存有效期 1 小时
 
 
 # 语言配置
@@ -1356,11 +1363,11 @@ class GameCard(CardWidget):
             self.modeLabel = CaptionLabel(mode_text, self)
             self.modeLabel.setTextColor(mode_color, mode_color)
         
-        # 删除按钮
-        self.deleteButton = TransparentToolButton(FluentIcon.DELETE, self)
-        self.deleteButton.setFixedSize(32, 32)
-        self.deleteButton.setToolTip(tr("delete"))
-        self.deleteButton.clicked.connect(self.on_delete_clicked)
+        # 更多按钮
+        self.moreButton = TransparentToolButton(FluentIcon.MORE, self)
+        self.moreButton.setFixedSize(32, 32)
+        self.moreButton.setToolTip("更多")
+        self.moreButton.clicked.connect(self._show_more_menu)
         
         # 版本切换按钮（仅SteamTools）
         self.toggleButton = None
@@ -1381,17 +1388,15 @@ class GameCard(CardWidget):
         self.vBoxLayout.setSpacing(4)
         self.vBoxLayout.addWidget(self.titleLabel, 0, Qt.AlignmentFlag.AlignVCenter)
         self.vBoxLayout.addWidget(self.infoLabel, 0, Qt.AlignmentFlag.AlignVCenter)
-        # 添加版本模式标签（仅SteamTools）
         if self.modeLabel:
             self.vBoxLayout.addWidget(self.modeLabel, 0, Qt.AlignmentFlag.AlignVCenter)
         self.vBoxLayout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         
         self.hBoxLayout.addLayout(self.vBoxLayout)
         self.hBoxLayout.addStretch(1)
-        # 添加版本切换按钮（仅SteamTools）
         if self.toggleButton:
             self.hBoxLayout.addWidget(self.toggleButton, 0, Qt.AlignmentFlag.AlignRight)
-        self.hBoxLayout.addWidget(self.deleteButton, 0, Qt.AlignmentFlag.AlignRight)
+        self.hBoxLayout.addWidget(self.moreButton, 0, Qt.AlignmentFlag.AlignRight)
         
         # 加载封面（最后执行）
         self.load_cover()
@@ -1454,6 +1459,14 @@ class GameCard(CardWidget):
                 # 构造ST文件名
                 filename = f"{self.appid}.lua"
                 parent.toggle_st_version(filename, self.appid)
+
+    def _show_more_menu(self):
+        menu = RoundMenu(parent=self)
+        menu.addAction(Action(FluentIcon.SHOPPING_CART, "查看商店页面", triggered=lambda: QDesktopServices.openUrl(QUrl(f"https://store.steampowered.com/app/{self.appid}"))))
+        menu.addAction(Action(FluentIcon.LINK, "查看 SteamDB", triggered=lambda: QDesktopServices.openUrl(QUrl(f"https://steamdb.info/app/{self.appid}"))))
+        menu.addSeparator()
+        menu.addAction(Action(FluentIcon.DELETE, tr("delete"), triggered=self.on_delete_clicked))
+        menu.exec(self.moreButton.mapToGlobal(self.moreButton.rect().bottomLeft()))
 
 
 class GameCardGrid(CardWidget):
@@ -1506,11 +1519,11 @@ class GameCardGrid(CardWidget):
             self.modeLabel.setTextColor(mode_color, mode_color)
             self.modeLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
-        # 删除按钮
-        self.deleteButton = TransparentToolButton(FluentIcon.DELETE, self)
-        self.deleteButton.setFixedSize(32, 32)
-        self.deleteButton.setToolTip(tr("delete"))
-        self.deleteButton.clicked.connect(self.on_delete_clicked)
+        # 更多按钮
+        self.moreButton = TransparentToolButton(FluentIcon.MORE, self)
+        self.moreButton.setFixedSize(32, 32)
+        self.moreButton.setToolTip("更多")
+        self.moreButton.clicked.connect(self._show_more_menu)
         
         # 版本切换按钮（仅SteamTools）
         self.toggleButton = None
@@ -1521,16 +1534,15 @@ class GameCardGrid(CardWidget):
             self.toggleButton.clicked.connect(self.on_toggle_clicked)
         
         # 设置布局
-        self.setFixedSize(200, 250)  # 稍微减小高度
+        self.setFixedSize(200, 250)
         
-        # 添加组件到布局 - 优化间距
+        # 添加组件到布局
         self.vBoxLayout.addWidget(self.coverLabel, 0, Qt.AlignmentFlag.AlignHCenter)
-        self.vBoxLayout.addSpacing(5)  # 封面和标题之间的小间距
+        self.vBoxLayout.addSpacing(5)
         self.vBoxLayout.addWidget(self.titleLabel, 0, Qt.AlignmentFlag.AlignHCenter)
-        self.vBoxLayout.addSpacing(3)  # 标题和信息之间的小间距
+        self.vBoxLayout.addSpacing(3)
         self.vBoxLayout.addWidget(self.infoLabel, 0, Qt.AlignmentFlag.AlignHCenter)
-        self.vBoxLayout.addSpacing(8)  # 信息和按钮之间的适中间距
-        # 按钮行：版本标签 + 切换 + 删除 同一行
+        self.vBoxLayout.addSpacing(8)
         btnLayout = QHBoxLayout()
         btnLayout.setSpacing(6)
         btnLayout.setContentsMargins(0, 0, 0, 0)
@@ -1538,9 +1550,9 @@ class GameCardGrid(CardWidget):
             btnLayout.addWidget(self.modeLabel)
         if self.toggleButton:
             btnLayout.addWidget(self.toggleButton)
-        btnLayout.addWidget(self.deleteButton)
+        btnLayout.addWidget(self.moreButton)
         self.vBoxLayout.addLayout(btnLayout)
-        self.vBoxLayout.addSpacing(5)  # 底部小间距
+        self.vBoxLayout.addSpacing(5)
         
         # 加载封面（最后执行）
         self.load_cover()
@@ -1591,6 +1603,14 @@ class GameCardGrid(CardWidget):
             else:
                 self.modeLabel.setText(tr("auto_update"))
                 self.modeLabel.setTextColor("#6ee7b7", "#6ee7b7")
+
+    def _show_more_menu(self):
+        menu = RoundMenu(parent=self)
+        menu.addAction(Action(FluentIcon.SHOPPING_CART, "查看商店页面", triggered=lambda: QDesktopServices.openUrl(QUrl(f"https://store.steampowered.com/app/{self.appid}"))))
+        menu.addAction(Action(FluentIcon.LINK, "查看 SteamDB", triggered=lambda: QDesktopServices.openUrl(QUrl(f"https://steamdb.info/app/{self.appid}"))))
+        menu.addSeparator()
+        menu.addAction(Action(FluentIcon.DELETE, tr("delete"), triggered=self.on_delete_clicked))
+        menu.exec(self.moreButton.mapToGlobal(self.moreButton.rect().bottomLeft()))
 
 
 # ===== 联机核心服务 (移植自 Cai-Install-Reborn) =====
@@ -1962,18 +1982,43 @@ class HomePage(ScrollArea):
         super().showEvent(event)
     
     def load_games(self):
-        """加载游戏列表"""
+        """加载游戏列表（两阶段：先快速显示文件列表，再后台加载游戏名称）"""
         async def _load():
             async with CaiBackend() as backend:
                 await backend.initialize()
                 files_data = await backend.get_managed_files(get_steam_lang(current_language))
                 return files_data
-        
+
         self.worker = AsyncWorker(_load())
         self.worker.result_ready.connect(self.on_games_loaded)
         self.worker.error.connect(self.on_load_error)
         self.worker.finished.connect(self.worker.deleteLater)
         self.worker.start()
+
+    def _load_missing_names(self, files_data):
+        """后台加载缺失的游戏名称，完成后更新卡片"""
+        async def _fetch():
+            async with CaiBackend() as backend:
+                await backend.initialize()
+                name_map = await backend.fetch_missing_game_names(files_data, get_steam_lang(current_language))
+                return name_map
+
+        self._name_worker = AsyncWorker(_fetch())
+        self._name_worker.result_ready.connect(lambda name_map: self._update_card_names(name_map))
+        self._name_worker.finished.connect(self._name_worker.deleteLater)
+        self._name_worker.start()
+
+    def _update_card_names(self, name_map):
+        """用后台加载的名称更新已显示的卡片"""
+        if not name_map:
+            return
+        for card in self.game_cards:
+            appid = getattr(card, 'appid', None)
+            if appid and appid in name_map:
+                name = name_map[appid]
+                if hasattr(card, 'titleLabel'):
+                    card.titleLabel.setText(name)
+
     
     def refresh_games(self):
         """刷新游戏列表"""
@@ -2026,6 +2071,9 @@ class HomePage(ScrollArea):
             
             # 显示所有游戏
             self.display_games(self.all_games_data)
+
+            # 后台加载缺失的游戏名称
+            self._load_missing_names(files_data)
                 
         except Exception as e:
             self.stats_label.setText(f"{tr('data_process_failed')}: {str(e)}")
@@ -2450,10 +2498,17 @@ class SearchResultCard(CardWidget):
         self.infoLabel = CaptionLabel(f"AppID: {appid}", self)
         self.infoLabel.setTextColor("#606060", "#d2d2d2")
         
-        # 入库按钮
-        self.selectButton = PrimaryPushButton("入库", self)
-        self.selectButton.setFixedSize(80, 32)
+        # 入库按钮（图标样式，和主页删除按钮一致）
+        self.selectButton = TransparentToolButton(FluentIcon.CLOUD_DOWNLOAD, self)
+        self.selectButton.setFixedSize(32, 32)
+        self.selectButton.setToolTip("入库")
         self.selectButton.clicked.connect(self.on_select_clicked)
+
+        # 更多按钮
+        self.moreButton = TransparentToolButton(FluentIcon.MORE, self)
+        self.moreButton.setFixedSize(32, 32)
+        self.moreButton.setToolTip("更多")
+        self.moreButton.clicked.connect(self._show_more_menu)
         
         # 设置布局
         self.setFixedHeight(80)
@@ -2471,6 +2526,7 @@ class SearchResultCard(CardWidget):
         self.hBoxLayout.addLayout(self.vBoxLayout)
         self.hBoxLayout.addStretch(1)
         self.hBoxLayout.addWidget(self.selectButton, 0, Qt.AlignmentFlag.AlignRight)
+        self.hBoxLayout.addWidget(self.moreButton, 0, Qt.AlignmentFlag.AlignRight)
         
         # 加载封面
         self.load_cover()
@@ -2498,8 +2554,13 @@ class SearchResultCard(CardWidget):
             while parent and not isinstance(parent, SearchPage):
                 parent = parent.parent()
             if parent:
-                # 直接调用入库，传入当前游戏信息
                 parent.unlock_game_direct(self.appid, self.game_name)
+
+    def _show_more_menu(self):
+        menu = RoundMenu(parent=self)
+        menu.addAction(Action(FluentIcon.SHOPPING_CART, "查看商店页面", triggered=lambda: QDesktopServices.openUrl(QUrl(f"https://store.steampowered.com/app/{self.appid}"))))
+        menu.addAction(Action(FluentIcon.LINK, "查看 SteamDB", triggered=lambda: QDesktopServices.openUrl(QUrl(f"https://steamdb.info/app/{self.appid}"))))
+        menu.exec(self.moreButton.mapToGlobal(self.moreButton.rect().bottomLeft()))
 
 
 class SearchResultCardGrid(CardWidget):
@@ -2537,23 +2598,37 @@ class SearchResultCardGrid(CardWidget):
         self.infoLabel.setTextColor("#606060", "#d2d2d2")
         self.infoLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
-        # 入库按钮
-        self.selectButton = PrimaryPushButton("入库", self)
-        self.selectButton.setFixedSize(80, 32)
+        # 入库按钮（图标样式）
+        self.selectButton = TransparentToolButton(FluentIcon.CLOUD_DOWNLOAD, self)
+        self.selectButton.setFixedSize(32, 32)
+        self.selectButton.setToolTip("入库")
         self.selectButton.clicked.connect(self.on_select_clicked)
+
+        # 更多按钮
+        self.moreButton = TransparentToolButton(FluentIcon.MORE, self)
+        self.moreButton.setFixedSize(32, 32)
+        self.moreButton.setToolTip("更多")
+        self.moreButton.clicked.connect(self._show_more_menu)
         
         # 设置布局
-        self.setFixedSize(200, 250)  # 稍微减小高度
+        self.setFixedSize(200, 250)
         
-        # 添加组件到布局 - 优化间距
+        # 添加组件到布局
         self.vBoxLayout.addWidget(self.coverLabel, 0, Qt.AlignmentFlag.AlignHCenter)
-        self.vBoxLayout.addSpacing(5)  # 封面和标题之间的小间距
+        self.vBoxLayout.addSpacing(5)
         self.vBoxLayout.addWidget(self.titleLabel, 0, Qt.AlignmentFlag.AlignHCenter)
-        self.vBoxLayout.addSpacing(3)  # 标题和信息之间的小间距
+        self.vBoxLayout.addSpacing(3)
         self.vBoxLayout.addWidget(self.infoLabel, 0, Qt.AlignmentFlag.AlignHCenter)
-        self.vBoxLayout.addSpacing(8)  # 信息和按钮之间的适中间距
-        self.vBoxLayout.addWidget(self.selectButton, 0, Qt.AlignmentFlag.AlignHCenter)
-        self.vBoxLayout.addSpacing(5)  # 底部小间距
+        self.vBoxLayout.addSpacing(8)
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(4)
+        btn_row.setContentsMargins(0, 0, 0, 0)
+        btn_row.addStretch(1)
+        btn_row.addWidget(self.selectButton)
+        btn_row.addWidget(self.moreButton)
+        btn_row.addStretch(1)
+        self.vBoxLayout.addLayout(btn_row)
+        self.vBoxLayout.addSpacing(5)
         
         # 加载封面
         self.load_cover()
@@ -2576,13 +2651,18 @@ class SearchResultCardGrid(CardWidget):
     
     def on_select_clicked(self):
         """选择按钮点击"""
-        # 发送信号给父页面
         if self.parent():
             parent = self.parent()
             while parent and not isinstance(parent, SearchPage):
                 parent = parent.parent()
             if parent:
                 parent.unlock_game_direct(self.appid, self.game_name)
+
+    def _show_more_menu(self):
+        menu = RoundMenu(parent=self)
+        menu.addAction(Action(FluentIcon.SHOPPING_CART, "查看商店页面", triggered=lambda: QDesktopServices.openUrl(QUrl(f"https://store.steampowered.com/app/{self.appid}"))))
+        menu.addAction(Action(FluentIcon.LINK, "查看 SteamDB", triggered=lambda: QDesktopServices.openUrl(QUrl(f"https://steamdb.info/app/{self.appid}"))))
+        menu.exec(self.moreButton.mapToGlobal(self.moreButton.rect().bottomLeft()))
 
 
 class SearchPage(ScrollArea):
@@ -3059,7 +3139,18 @@ class SearchPage(ScrollArea):
         """页面显示时加载推荐"""
         super().showEvent(event)
         if not self.search_results and not self.search_input.text().strip():
-            self._load_recommendations()
+            # 有未过期的模块级缓存，直接渲染，不发请求
+            if _rec_cache and (_time.time() - _rec_cache_ts) < _REC_CACHE_TTL:
+                if not self._rec_games:
+                    self._rec_games = _rec_cache
+                    self._rec_shown = 0
+                if not self.result_cards:
+                    if hasattr(self, '_rec_label') and self._rec_label:
+                        self._rec_label.setText(tr("recommended_hint"))
+                        self._rec_label.show()
+                    self._render_recommendations()
+            else:
+                self._load_recommendations()
 
     def _load_recommendations(self):
         """加载热门游戏推荐"""
@@ -3076,6 +3167,11 @@ class SearchPage(ScrollArea):
             self.main_layout.insertWidget(3, self._rec_label)
         self._rec_label.setText(tr("loading_recommendations"))
         self._rec_label.show()
+
+        # 已有未过期缓存，直接用
+        if _rec_cache and (_time.time() - _rec_cache_ts) < _REC_CACHE_TTL:
+            self._on_recommendations_loaded(_rec_cache)
+            return
 
         async def _fetch():
             try:
@@ -3108,6 +3204,7 @@ class SearchPage(ScrollArea):
 
     def _on_recommendations_loaded(self, games):
         """推荐加载完成"""
+        global _rec_cache, _rec_cache_ts
         self._rec_worker = None
         if not games:
             if hasattr(self, '_rec_label') and self._rec_label:
@@ -3115,6 +3212,9 @@ class SearchPage(ScrollArea):
             return
         if hasattr(self, '_rec_label') and self._rec_label:
             self._rec_label.setText(tr("recommended_hint"))
+        # 更新模块级缓存
+        _rec_cache = games
+        _rec_cache_ts = _time.time()
         # 缓存推荐数据
         self._rec_games = games
         self._rec_shown = 0
@@ -3909,26 +4009,16 @@ class SettingsPage(ScrollArea):
         self.setObjectName("settingsPage")
         self.setWidgetResizable(True)
         
-        # 主容器
-        container = QWidget()
-        container.setObjectName("settingsContainer")
-        self.setWidget(container)
-        
-        layout = QVBoxLayout(container)
-        layout.setContentsMargins(30, 30, 30, 30)
-        layout.setSpacing(20)
-        
-        # 标题
-        title = SubtitleLabel(tr("settings"), self)
-        layout.addWidget(title)
-        
-        # 使用新的分组卡片布局
-        settings_card = SettinsCard(self)
-        layout.addWidget(settings_card)
-        
-        # 保存对控件的引用以便后续使用
-        self.steam_path_edit = settings_card.steam_path_edit
-        self.token_edit = settings_card.token_edit
+        # 占位容器，真正内容在首次显示时构建
+        self._container = QWidget()
+        self._container.setObjectName("settingsContainer")
+        self.setWidget(self._container)
+        self.setStyleSheet("SettingsPage { background: transparent; }")
+        self._container.setStyleSheet("QWidget#settingsContainer { background: transparent; }")
+
+        # 控件引用（懒初始化后赋值）
+        self.steam_path_edit = None
+        self.token_edit = None
         self.debug_check = None
         self.logging_check = None
         self.unlocker_combo = None
@@ -3940,25 +4030,42 @@ class SettingsPage(ScrollArea):
         self.st_fixed_check = None
         self.dlc_timeout_spinbox = None
         self.log_view = None
-        
-        # 添加其他设置卡片（应用程序配置、外观设置等）
-        self._setup_additional_settings(layout)
-        
-        layout.addStretch(1)
-        
-        # 设置透明背景
-        self.setStyleSheet("SettingsPage { background: transparent; }")
-        container.setStyleSheet("QWidget#settingsContainer { background: transparent; }")
-        
-        # 标记需要加载配置
+        self.default_page_combo = None
+
         self._config_loaded = False
         self.worker = None
         self._save_timer = None
-
-        # 注册日志 handler，将 backend 日志输出到设置页面
+        self._ui_built = False
+        self._log_handler = None
+        # 提前注册日志 handler，缓冲 UI 构建前的日志
+        self._pending_logs: list = []
         self._log_handler = QtLogHandler(self)
         self._log_handler.log_record.connect(self._append_log)
         logging.getLogger(' Cai install').addHandler(self._log_handler)
+
+    def _build_ui(self):
+        """首次显示时构建完整 UI"""
+        layout = QVBoxLayout(self._container)
+        layout.setContentsMargins(30, 30, 30, 30)
+        layout.setSpacing(20)
+
+        title = SubtitleLabel(tr("settings"), self)
+        layout.addWidget(title)
+
+        settings_card = SettinsCard(self)
+        layout.addWidget(settings_card)
+
+        self.steam_path_edit = settings_card.steam_path_edit
+        self.token_edit = settings_card.token_edit
+
+        self._setup_additional_settings(layout)
+
+        layout.addStretch(1)
+
+        # handler 已在 __init__ 注册，刷入缓冲日志
+        for level, msg in self._pending_logs:
+            self._append_log(level, msg)
+        self._pending_logs.clear()
     
     def _setup_additional_settings(self, layout):
         """设置其他设置卡片"""
@@ -4132,6 +4239,9 @@ class SettingsPage(ScrollArea):
 
     def _append_log(self, level: str, msg: str):
         """将日志追加到日志视图"""
+        if self.log_view is None:
+            self._pending_logs.append((level, msg))
+            return
         color_map = {
             "DEBUG": "#888888",
             "INFO": "#cccccc",
@@ -4149,12 +4259,24 @@ class SettingsPage(ScrollArea):
         self.log_view.clear()
 
     def showEvent(self, event):
-        """页面显示时加载配置"""
+        """页面显示时懒构建 UI 并加载配置"""
         super().showEvent(event)
+        if not self._ui_built:
+            self._ui_built = True
+            from PyQt6.QtCore import QTimer
+            # 推迟到事件循环空闲，避免阻塞页面切换动画
+            QTimer.singleShot(0, self._build_and_load)
+        elif not self._config_loaded:
+            self._config_loaded = True
+            self.load_config()
+            self._setup_auto_save_listeners()
+
+    def _build_and_load(self):
+        """构建 UI 后立即加载配置"""
+        self._build_ui()
         if not self._config_loaded:
             self._config_loaded = True
             self.load_config()
-            # 设置自动保存监听器
             self._setup_auto_save_listeners()
     
     def _setup_auto_save_listeners(self):
@@ -4841,6 +4963,10 @@ class MainWindow(MSFluentWindow):
         
         # 根据配置切换到默认界面
         self.switch_to_default_page()
+
+        # 启动后台预构建设置页 UI，避免首次点击卡顿
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(500, self._prebuild_settings)
     
     def switch_to_default_page(self):
         """切换到默认界面"""
@@ -4863,6 +4989,12 @@ class MainWindow(MSFluentWindow):
         except Exception:
             # 出错时默认显示主页
             self.switchTo(self.home_page)
+
+    def _prebuild_settings(self):
+        """应用启动后预构建设置页 UI，消除首次点击卡顿"""
+        if not self.settings_page._ui_built:
+            self.settings_page._ui_built = True
+            self.settings_page._build_ui()
     
     def on_restart_steam(self):
         """重启 Steam"""

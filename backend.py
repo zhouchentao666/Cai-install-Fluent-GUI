@@ -65,6 +65,28 @@ DEFAULT_CONFIG = {
     "QA5": "ZIP清单库格式: {\"name\": \"显示名称\", \"url\": \"下载URL，用{app_id}作为占位符\"}"
 }
 
+# --- 模块级游戏名称缓存（跨实例共享，避免重复请求）---
+_global_name_cache: Dict[str, str] = {}
+_name_cache_path = Path.cwd() / 'name_cache.json'
+
+def _load_global_name_cache():
+    global _global_name_cache
+    try:
+        if _name_cache_path.exists():
+            with open(_name_cache_path, 'r', encoding='utf-8') as f:
+                _global_name_cache = json.loads(f.read())
+    except Exception:
+        _global_name_cache = {}
+
+def _save_global_name_cache():
+    try:
+        with open(_name_cache_path, 'w', encoding='utf-8') as f:
+            f.write(json.dumps(_global_name_cache, ensure_ascii=False))
+    except Exception:
+        pass
+
+_load_global_name_cache()
+
 class STConverter:
     def __init__(self):
         self.logger = logging.getLogger('STConverter')
@@ -119,7 +141,7 @@ class CaiBackend:
         self.lock = asyncio.Lock()
         self.temp_path = self.project_root / 'temp'
         self.log = self._init_log()
-        self.name_cache: Dict[str, str] = {} # NEW: 添加游戏名称缓存
+        self.name_cache: Dict[str, str] = _global_name_cache  # 引用全局缓存
 
     async def __aenter__(self):
         self.client = httpx.AsyncClient(verify=False, trust_env=True)
@@ -361,6 +383,9 @@ class CaiBackend:
         except Exception as e:
             self.log.error(f"创建Steam子目录时失败: {e}")
 
+        # 每次初始化时检查并恢复被 Steam 更新清除的入库文件
+        self.restore_managed_files_from_backup()
+
         return self.unlocker_type
 
     def stack_error(self, exception: Exception) -> str:
@@ -455,6 +480,7 @@ class CaiBackend:
                     game_name = app_data["data"].get("name", "")
                     if game_name:
                         self.name_cache[cache_key] = game_name
+                        _save_global_name_cache()
                         return game_name
                         
             return f"AppID {appid}"
@@ -516,43 +542,49 @@ class CaiBackend:
     # --- END 联机游戏启动配置管理 ---
 
     async def get_managed_files(self, lang: str = "schinese") -> Dict:
-        """扫描所有相关目录，返回文件信息，并批量获取游戏名称。"""
+        """扫描所有相关目录，返回文件信息。缓存中有名称则直接填充，否则留空（AppID占位）。"""
         if not self.steam_path or not self.steam_path.exists():
             return {"error": "Steam路径未配置或无效。"}
 
         file_data = {"st": [], "gl": [], "assistant": []}
-        all_appids_to_fetch = set()
 
-        # 1. 扫描文件并收集AppID
+        # 1. 扫描文件
         st_path = self.steam_path / 'config' / 'stplug-in'
         gl_path = self.steam_path / 'AppList'
 
-        # SteamTools
         if st_path.exists():
-            file_data['st'], st_appids = self._scan_st_files(st_path)
-            all_appids_to_fetch.update(st_appids)
-
-        # GreenLuma
+            file_data['st'], _ = self._scan_st_files(st_path)
         if gl_path.exists():
-            file_data['gl'], gl_appids = self._scan_generic_files(gl_path, ".txt")
-            all_appids_to_fetch.update(gl_appids)
+            file_data['gl'], _ = self._scan_generic_files(gl_path, ".txt")
 
-        # 2. 批量获取游戏名称
-        appids_to_fetch = [appid for appid in all_appids_to_fetch if f"{appid}_{lang}" not in self.name_cache]
-        if appids_to_fetch:
-            tasks = [self._fetch_game_name_for_manager(appid, lang) for appid in appids_to_fetch]
-            results = await asyncio.gather(*tasks)
-            for appid, name in zip(appids_to_fetch, results):
-                self.name_cache[f"{appid}_{lang}"] = name
-
-        # 3. 将获取到的名称填充回数据
+        # 2. 用缓存填充已知名称，未知的留空（前端显示 AppID 占位）
         for category in file_data:
             for item in file_data[category]:
                 cache_key = f"{item['appid']}_{lang}"
                 if cache_key in self.name_cache:
                     item['game_name'] = self.name_cache[cache_key]
-        
+
         return file_data
+
+    async def fetch_missing_game_names(self, file_data: Dict, lang: str = "schinese") -> Dict:
+        """对 file_data 中名称缺失的条目批量请求 Steam API，返回 {appid: name} 映射。"""
+        missing = set()
+        for category in file_data:
+            for item in file_data[category]:
+                cache_key = f"{item['appid']}_{lang}"
+                if cache_key not in self.name_cache and item['appid'].isdigit():
+                    missing.add(item['appid'])
+
+        if not missing:
+            return {}
+
+        tasks = [self._fetch_game_name_for_manager(appid, lang) for appid in missing]
+        results = await asyncio.gather(*tasks)
+        name_map = {}
+        for appid, name in zip(missing, results):
+            name_map[appid] = name
+        _save_global_name_cache()
+        return name_map
 
     def _scan_st_files(self, directory: Path) -> Tuple[List[Dict], set]:
         """扫描SteamTools目录，返回文件数据和AppID集合。"""
@@ -2035,6 +2067,14 @@ class CaiBackend:
                     await lua_file.write('\n'.join(manifest_lines) + '\n')
             
             self.log.info(f"已为SteamTools生成解锁文件: {lua_filename}")
+
+            # 同步备份，防止 Steam 更新后丢失
+            try:
+                backup_st = self.project_root / 'backup' / 'stplug-in'
+                backup_st.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(lua_filepath, backup_st / lua_filename)
+            except Exception:
+                pass
             
             # 处理 DLC
             if add_all_dlc:
@@ -2177,6 +2217,38 @@ class CaiBackend:
             return False
 
     # Original methods continue...
+    def restore_managed_files_from_backup(self) -> int:
+        """检查备份目录，将 Steam 更新后丢失的入库文件恢复回去。返回恢复的文件数量。"""
+        if not self.steam_path:
+            return 0
+        backup_dir = self.project_root / 'backup'
+        st_backup = backup_dir / 'stplug-in'
+        gl_backup = backup_dir / 'AppList'
+        st_src = self.steam_path / 'config' / 'stplug-in'
+        gl_src = self.steam_path / 'AppList'
+
+        restored = 0
+        try:
+            if st_src.exists() and st_backup.exists():
+                for f in st_backup.glob('*.lua'):
+                    dest = st_src / f.name
+                    if not dest.exists():
+                        shutil.copy2(f, dest)
+                        restored += 1
+                        self.log.info(f"[恢复] {f.name}")
+            if gl_src.exists() and gl_backup.exists():
+                for f in gl_backup.glob('*.txt'):
+                    dest = gl_src / f.name
+                    if not dest.exists():
+                        shutil.copy2(f, dest)
+                        restored += 1
+                        self.log.info(f"[恢复] {f.name}")
+            if restored:
+                self.log.info(f"Steam 更新后共恢复 {restored} 个入库文件")
+        except Exception as e:
+            self.log.warning(f"恢复入库文件时出错: {e}")
+        return restored
+
     def restart_steam(self) -> bool:
         if not self.steam_path:
             self.log.error("无法重启 Steam：未找到 Steam 路径。")
@@ -2186,15 +2258,78 @@ class CaiBackend:
             self.log.error(f"无法启动 Steam：在 '{self.steam_path}' 目录下未找到 steam.exe。")
             return False
         try:
+            # ── 1. 备份入库文件，防止 Steam 更新清除 ──
+            backup_dir = self.project_root / 'backup'
+            st_backup = backup_dir / 'stplug-in'
+            gl_backup = backup_dir / 'AppList'
+            st_src = self.steam_path / 'config' / 'stplug-in'
+            gl_src = self.steam_path / 'AppList'
+
+            if st_src.exists():
+                st_backup.mkdir(parents=True, exist_ok=True)
+                for f in st_src.glob('*.lua'):
+                    if f.name != 'steamtools.lua':
+                        shutil.copy2(f, st_backup / f.name)
+                self.log.info(f"已备份 {len(list(st_backup.glob('*.lua')))} 个 SteamTools lua 文件")
+
+            if gl_src.exists():
+                gl_backup.mkdir(parents=True, exist_ok=True)
+                for f in gl_src.glob('*.txt'):
+                    shutil.copy2(f, gl_backup / f.name)
+                self.log.info(f"已备份 {len(list(gl_backup.glob('*.txt')))} 个 GreenLuma txt 文件")
+
+            # ── 2. 关闭 Steam ──
             self.log.info("正在尝试关闭正在运行的 Steam 进程...")
-            result = subprocess.run(["taskkill", "/F", "/IM", "steam.exe"], capture_output=True, text=True, check=False)
-            if result.returncode == 0: self.log.info("成功关闭 Steam 进程。")
-            elif result.returncode == 128: self.log.info("未找到正在运行的 Steam 进程，将直接启动。")
-            else: self.log.warning(f"关闭 Steam 时遇到问题 (返回码: {result.returncode})。错误信息: {result.stderr.strip()}")
-            self.log.info("等待 3 秒以确保 Steam 完全关闭...")
-            time.sleep(3)
-            self.log.info(f"正在尝试从 '{steam_exe_path}' 启动 Steam...")
-            subprocess.Popen([str(steam_exe_path)], creationflags=subprocess.DETACHED_PROCESS, close_fds=True)
+            try:
+                subprocess.run(
+                    [str(steam_exe_path), "-shutdown"],
+                    capture_output=True, timeout=5, check=False
+                )
+            except Exception:
+                pass
+
+            steam_procs = ["steam.exe", "steamservice.exe", "steamwebhelper.exe"]
+            for proc in steam_procs:
+                subprocess.run(
+                    ["taskkill", "/F", "/IM", proc],
+                    capture_output=True, text=True, check=False
+                )
+
+            # 等待进程完全退出（最多 6 秒，每 0.5 秒检查一次）
+            self.log.info("等待 Steam 进程完全退出...")
+            for _ in range(12):
+                time.sleep(0.5)
+                result = subprocess.run(
+                    ["tasklist", "/FI", "IMAGENAME eq steam.exe"],
+                    capture_output=True, text=True, check=False
+                )
+                if "steam.exe" not in result.stdout.lower():
+                    break
+
+            # ── 3. 恢复被清除的入库文件 ──
+            restored_st = restored_gl = 0
+            if st_src.exists() and st_backup.exists():
+                for f in st_backup.glob('*.lua'):
+                    dest = st_src / f.name
+                    if not dest.exists():
+                        shutil.copy2(f, dest)
+                        restored_st += 1
+            if gl_src.exists() and gl_backup.exists():
+                for f in gl_backup.glob('*.txt'):
+                    dest = gl_src / f.name
+                    if not dest.exists():
+                        shutil.copy2(f, dest)
+                        restored_gl += 1
+            if restored_st or restored_gl:
+                self.log.info(f"已恢复 {restored_st} 个 ST 文件、{restored_gl} 个 GL 文件（Steam 更新后丢失）")
+
+            # ── 4. 启动 Steam ──
+            self.log.info(f"正在启动 Steam：{steam_exe_path}")
+            subprocess.Popen(
+                [str(steam_exe_path), "-noreactlogin"],
+                creationflags=subprocess.DETACHED_PROCESS,
+                close_fds=True
+            )
             self.log.info("已发送重启 Steam 的指令。")
             return True
         except Exception as e:
@@ -2323,6 +2458,14 @@ class CaiBackend:
                     (app_list_path / f'{index}.txt').write_text(str(depot_id), encoding='utf-8')
                     depot_dict[index] = depot_id
             self.log.info(f"成功将 {len(depot_id_list)} 个ID添加到GreenLuma的AppList中。")
+            # 同步备份，防止 Steam 更新后丢失
+            try:
+                backup_gl = self.project_root / 'backup' / 'AppList'
+                backup_gl.mkdir(parents=True, exist_ok=True)
+                for f in app_list_path.glob('*.txt'):
+                    shutil.copy2(f, backup_gl / f.name)
+            except Exception:
+                pass
             return True
         except Exception as e:
             self.log.error(f'GreenLuma添加 AppID失败: {e}')
