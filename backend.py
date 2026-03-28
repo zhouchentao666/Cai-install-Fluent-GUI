@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Tuple, Any, List, Dict, Literal
 from urllib.parse import quote
 
-CURRENT_VERSION = "2.5"  # 当前版本号
+CURRENT_VERSION = "1.8"  # 当前版本号
 GITHUB_REPO = "zhouchentao666/Cai-install-Fluent-GUI" 
 
 # --- LOGGING SETUP ---
@@ -870,7 +870,7 @@ class CaiBackend:
 
     def get_all_github_repos(self) -> List[str]:
         """获取所有GitHub仓库（内置+自定义）"""
-        builtin_repos = ['Auiowu/ManifestAutoUpdate', 'SteamAutoCracks/ManifestHub']
+        builtin_repos = ['Auiowu/ManifestAutoUpdate']
         custom_repos = [repo['repo'] for repo in self.get_custom_github_repos()]
         return builtin_repos + custom_repos
 
@@ -1475,184 +1475,116 @@ class CaiBackend:
             self.log.error(f"保存创意工坊清单文件时出错: {self.stack_error(e)}")
             return False
 
-    async def _get_buqiuren_session_token(self) -> str | None:
-        """获取不求人接口的会话令牌"""
-        backup_token = ''.join(random.choices(string.ascii_letters + string.digits, k=32))
-        
+    async def _get_buqiuren_manifest_code(self, manifest_id: str) -> str | None:
+        """通过 manifest.steam.run API 获取清单请求码"""
+        headers = {
+            "Host": "manifest.steam.run",
+            "User-Agent": "Mozilla/5.0",
+            "Accept": "*/*",
+        }
         try:
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                "Referer": "https://manifest.steam.run/",
-                "Origin": "https://manifest.steam.run",
-                "Accept": "application/json, text/plain, */*",
-            }
-            
-            session_resp = await self.client.post(
-                "https://manifest.steam.run/api/session", 
-                headers=headers,
-                timeout=30
-            )
-            
-            if session_resp.status_code == 200:
-                data = session_resp.json()
-                if "token" in data:
-                    token = data["token"]
-                    self.log.info(f"成功获取不求人会话令牌: ...{token[-6:]}")
-                    return token
-            
-            self.log.warning("使用备用令牌")
-            
+            url = f"https://manifest.steam.run/api/manifest/{manifest_id}"
+            res = await self.client.get(url, headers=headers, timeout=15)
+            if res.status_code == 200:
+                content = res.json().get("content")
+                if content:
+                    return str(content).strip()
+            self.log.warning(f"获取清单Code失败，状态码: {res.status_code}")
         except Exception as e:
-            self.log.warning(f"获取不求人会话令牌时出错: {e}")
-        
-        return backup_token
+            self.log.warning(f"获取清单Code时出错: {e}")
+        return None
 
     async def _download_manifest_buqiuren(self, depot_id: str, manifest_id: str, depot_name: str) -> bool:
-        """使用不求人接口下载清单"""
+        """使用不求人接口下载清单（manifest.steam.run 新版流程）"""
         output_filename = f"{depot_id}_{manifest_id}.manifest"
+        cdn_host = "steamcontent.tnkjmec.com"
         max_retries = 3
-        
+
         for attempt in range(max_retries):
             try:
-                # 获取session token
-                session_token = await self._get_buqiuren_session_token()
-                if not session_token:
-                    self.log.error("无法获取会话令牌")
+                self.log.info(f"正在获取清单Code... [Depot: {depot_id}, Manifest: {manifest_id}]")
+                code = await self._get_buqiuren_manifest_code(manifest_id)
+                if not code:
+                    self.log.error(f"无法获取清单Code")
                     if attempt < max_retries - 1:
                         await asyncio.sleep(5)
                         continue
                     return False
-                
-                # 请求下载链接
-                self.log.info(f"正在请求清单下载链接... [Depot: {depot_id}, Manifest: {manifest_id}]")
-                
-                request_payload = {
-                    "depot_id": str(depot_id),
-                    "manifest_id": str(manifest_id),
-                    "token": session_token
-                }
-                
-                headers = {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                    "Referer": "https://manifest.steam.run/",
-                    "Origin": "https://manifest.steam.run",
-                    "Accept": "application/json, text/plain, */*",
-                    "Content-Type": "application/json"
-                }
-                
-                # 等待避免频率限制
-                await asyncio.sleep(random.uniform(2, 5))
-                
-                code_response = await self.client.post(
-                    "https://manifest.steam.run/api/request-code",
-                    json=request_payload,
-                    headers=headers,
-                    timeout=60
+
+                download_url = f"https://{cdn_host}/depot/{depot_id}/manifest/{manifest_id}/5/{code}"
+                self.log.info(f"正在从CDN下载清单文件...")
+
+                manifest_response = await self.client.get(
+                    download_url,
+                    timeout=max(180, self.config.get("download_timeout", 30) * 6)
                 )
-                
-                if code_response.status_code == 429:
-                    self.log.warning(f"请求频率过高，等待后重试...")
+
+                if manifest_response.status_code == 429:
+                    self.log.warning("请求频率过高，等待后重试...")
                     if attempt < max_retries - 1:
                         await asyncio.sleep(30)
                         continue
                     return False
-                
-                if code_response.status_code != 200:
-                    self.log.error(f"请求失败，状态码: {code_response.status_code}")
+
+                if manifest_response.status_code != 200:
+                    self.log.error(f"下载失败，状态码: {manifest_response.status_code}")
                     if attempt < max_retries - 1:
                         await asyncio.sleep(10)
                         continue
                     return False
-                
-                try:
-                    code_data = code_response.json()
-                except:
-                    self.log.error("服务器返回无效的JSON响应")
-                    if attempt < max_retries - 1:
-                        continue
-                    return False
-                
-                download_url = code_data.get("download_url")
-                if not download_url:
-                    error_msg = code_data.get('error', code_data.get('message', '未知错误'))
-                    self.log.error(f"请求下载链接失败: {error_msg}")
-                    if attempt < max_retries - 1:
-                        await asyncio.sleep(15)
-                        continue
-                    return False
-                
-                self.log.info(f"获取到下载链接")
-                
-                # 下载清单文件
-                self.log.info("正在下载清单文件...")
-                manifest_response = await self.client.get(download_url, timeout=max(180, self.config.get("download_timeout", 30) * 6))
-                
-                if manifest_response.status_code != 200:
-                    self.log.error(f"下载失败，状态码: {manifest_response.status_code}")
-                    if attempt < max_retries - 1:
-                        continue
-                    return False
-                
+
                 manifest_content = manifest_response.content
-                
+
                 # 处理文件内容（检查是否为ZIP）
                 final_content = None
-                
                 if manifest_content.startswith(b'PK\x03\x04'):
                     self.log.info("检测到ZIP文件，正在自动解压...")
                     try:
-                        with io.BytesIO(manifest_content) as mem_zip:
-                            with zipfile.ZipFile(mem_zip, 'r') as z:
-                                file_list = z.namelist()
-                                if len(file_list) == 1:
-                                    target_file = file_list[0]
-                                    self.log.info(f"从ZIP中提取文件: {target_file}")
-                                    final_content = z.read(target_file)
-                                else:
-                                    self.log.warning(f"ZIP包中文件数量不为1: {len(file_list)}")
-                                    final_content = manifest_content
+                        with zipfile.ZipFile(io.BytesIO(manifest_content), 'r') as z:
+                            z.testzip()
+                            file_list = z.namelist()
+                            if file_list:
+                                final_content = z.read(file_list[0])
+                                self.log.info(f"从ZIP中提取文件: {file_list[0]}")
+                            else:
+                                self.log.warning("ZIP包为空")
                     except Exception as e:
                         self.log.warning(f"处理ZIP文件时出错: {e}")
                         final_content = manifest_content
                 else:
                     final_content = manifest_content
-                
+
                 if not final_content:
                     self.log.error("最终文件内容为空")
                     if attempt < max_retries - 1:
                         continue
                     return False
-                
+
                 # 保存文件到depotcache目录
                 if self.unlocker_type == "steamtools":
                     st_depot_path = self.steam_path / 'config' / 'depotcache'
                     gl_depot_path = self.steam_path / 'depotcache'
-                    
                     st_depot_path.mkdir(parents=True, exist_ok=True)
                     gl_depot_path.mkdir(parents=True, exist_ok=True)
-                    
                     (st_depot_path / output_filename).write_bytes(final_content)
-                    self.log.info(f"清单已保存到: {st_depot_path / output_filename}")
-                    
                     (gl_depot_path / output_filename).write_bytes(final_content)
-                    self.log.info(f"清单已保存到: {gl_depot_path / output_filename}")
+                    self.log.info(f"清单已保存到: {st_depot_path / output_filename}")
                 else:
-                    # GreenLuma
                     depot_path = self.steam_path / 'depotcache'
                     depot_path.mkdir(parents=True, exist_ok=True)
                     (depot_path / output_filename).write_bytes(final_content)
                     self.log.info(f"清单已保存到: {depot_path / output_filename}")
-                
+
                 self.log.info(f"成功下载清单: {depot_name} ({output_filename})")
                 return True
-                
+
             except Exception as e:
                 self.log.error(f"下载过程中出错: {e}")
                 if attempt < max_retries - 1:
                     self.log.info(f"等待后重试... (尝试 {attempt + 2}/{max_retries})")
                     await asyncio.sleep(15)
                     continue
-        
+
         self.log.error(f"下载清单 {output_filename} 失败：所有重试都失败了")
         return False
 
@@ -2654,22 +2586,17 @@ class CaiBackend:
 
     async def process_zip_source(self, app_id: str, tool_type: str, unlocker_type: str, use_st_auto_update: bool, add_all_dlc: bool, patch_depot_key: bool = False) -> bool:
         source_map = {
-            "printedwaste": "https://api.printedwaste.com/gfk/download/{app_id}",
-            "cysaw": "https://cysaw.top/uploads/{app_id}.zip",
-            "furcate": "https://furcate.eu/files/{app_id}.zip",
             "walftech": "https://walftech.com/proxy.php?url=https%3A%2F%2Fsteamgames554.s3.us-east-1.amazonaws.com%2F{app_id}.zip",
-            "steamdatabase": "https://steamdatabase.s3.eu-north-1.amazonaws.com/{app_id}.zip",
-            "steamautocracks_v2": "special",  # 特殊处理标识
-            "steamautocracks_v1": "special",  # 特殊处理标识
+            "MHub": "https://9c2e8df25aa75d4399cac3ca1ed62e9d.r2.cloudflarestorage.com/steam-manifests/{app_id}.zip",
+            "steamautocracks_v2": "special",
+            "steamautocracks_v1": "special",
+            "sac-other": "special",
             "buqiuren": "special",
             "sudama": "special"
         }
-        source_name_map = { 
-            "printedwaste": "SWA V2 (printedwaste)", 
-            "cysaw": "Cysaw", 
-            "furcate": "Furcate", 
-            "walftech": "Walftech", 
-            "steamdatabase": "SteamDatabase",
+        source_name_map = {
+            "walftech": "Walftech",
+            "MHub": "MHub",
             "steamautocracks_v2": "SteamAutoCracks/ManifestHub(2)",
             "steamautocracks_v1": "SteamAutoCracks V1 (ManifestHub)"
         }
@@ -2680,6 +2607,26 @@ class CaiBackend:
         # 特殊处理 steamautocracks_v1（GitHub分支方式）
         if tool_type == "steamautocracks_v1":
             return await self.process_github_manifest(app_id, "SteamAutoCracks/ManifestHub", unlocker_type, use_st_auto_update, add_all_dlc, patch_depot_key)
+        # 特殊处理 sac-other：直连失败时自动走镜像
+        if tool_type == "sac-other":
+            repo = "SteamAutoCracks/ManifestHub"
+            direct_url = f"https://codeload.github.com/{repo}/zip/refs/heads/{app_id}"
+            self.log.info(f"正从 SAC分流 下载 AppID {app_id} 的清单...")
+            ok = await self._process_zip_manifest_generic(app_id, direct_url, "SAC分流", unlocker_type, use_st_auto_update, add_all_dlc, patch_depot_key)
+            if ok:
+                return True
+            self.log.warning("SAC分流直连失败，尝试镜像...")
+            for mirror in [
+                f"https://gh-proxy.org/https://codeload.github.com/{repo}/zip/refs/heads/{app_id}",
+                f"https://cdn.gh-proxy.org/https://codeload.github.com/{repo}/zip/refs/heads/{app_id}",
+                f"https://edgeone.gh-proxy.org/https://codeload.github.com/{repo}/zip/refs/heads/{app_id}",
+            ]:
+                self.log.info(f"尝试镜像: {mirror.split('/')[2]}")
+                ok = await self._process_zip_manifest_generic(app_id, mirror, "SAC分流(镜像)", unlocker_type, use_st_auto_update, add_all_dlc, patch_depot_key)
+                if ok:
+                    return True
+            self.log.error("SAC分流所有镜像均失败")
+            return False
         if tool_type == "buqiuren":
             return await self.process_buqiuren_manifest(app_id)
             

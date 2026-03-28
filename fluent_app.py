@@ -21,11 +21,11 @@ from qfluentwidgets import (
     TransparentToolButton, IconWidget, FlowLayout, SearchLineEdit,
     PrimaryPushButton, CheckBox, GroupHeaderCardWidget, InfoBarIcon,
     SpinBox, HyperlinkButton, MessageBoxBase, TitleLabel,
-    RoundMenu, Action
+    RoundMenu, Action, TextEdit, SingleDirectionScrollArea
 )
 
 # 导入后端
-from backend import CaiBackend, get_steam_lang
+from backend import CaiBackend, get_steam_lang, CURRENT_VERSION
 
 import time as _time
 # 模块级推荐缓存（进程内共享，避免切换页面重复请求）
@@ -213,16 +213,13 @@ TEXTS = {
         "pink": "粉色 (#e3008c)",
         "tip_source_fail": "提示: 如果某个源失败，请尝试其他源",
         "auto_search_github": "自动搜索GitHub",
-        "swa_v2": "SWA V2",
-        "cysaw": "Cysaw",
-        "furcate": "Furcate",
+        "sac-other": "sac分流",
         "walftech": "Walftech",
-        "steamdatabase": "steamdatabase",
+        "MHub": "MHub",
         "steamautocracks_v2": "SteamAutoCracks V2 (仅密钥)",
         "sudama": "Sudama库 (仅密钥)",
         "buqiuren": "清单不求人库 (仅清单)",
         "github_auiowu": "GitHub (Auiowu)",
-        "github_sac": "GitHub (SAC)",
         "restart_steam_title": "重启 Steam",
         "restart_steam_confirm_message": "确定要重启 Steam 吗？\n\n这将关闭当前运行的 Steam 并重新启动。",
         
@@ -357,15 +354,11 @@ TEXTS = {
         "tip_source_fail": "Tip: If one source fails, try another",
         "auto_search_github": "Auto Search GitHub",
         "swa_v2": "SWA V2",
-        "cysaw": "Cysaw",
-        "furcate": "Furcate",
         "walftech": "Walftech",
-        "steamdatabase": "steamdatabase",
         "steamautocracks_v2": "SteamAutoCracks V2 (Keys Only)",
         "sudama": "Sudama Library (Keys Only)",
         "buqiuren": "Manifest Helper Library (Manifest Only)",
         "github_auiowu": "GitHub (Auiowu)",
-        "github_sac": "GitHub (SAC)",
         "restart_steam_title": "Restart Steam",
         "restart_steam_confirm_message": "Are you sure you want to restart Steam?\n\nThis will close the currently running Steam and restart it.",
         
@@ -507,15 +500,11 @@ TEXTS = {
         "tip_source_fail": "Astuce: Si une source échoue, essayez-en une autre",
         "auto_search_github": "Recherche automatique GitHub",
         "swa_v2": "SWA V2",
-        "cysaw": "Cysaw",
-        "furcate": "Furcate",
         "walftech": "Walftech",
-        "steamdatabase": "steamdatabase",
         "steamautocracks_v2": "SteamAutoCracks V2 (Clés seulement)",
         "sudama": "Bibliothèque Sudama (Clés seulement)",
         "buqiuren": "Bibliothèque d'aide de manifeste (Manifeste seulement)",
         "github_auiowu": "GitHub (Auiowu)",
-        "github_sac": "GitHub (SAC)",
         "restart_steam_title": "Redémarrer Steam",
         "restart_steam_confirm_message": "Êtes-vous sûr de vouloir redémarrer Steam?\n\nCela fermera Steam en cours et le redémarrera.",
         "tip": "Astuce",
@@ -656,15 +645,11 @@ TEXTS = {
         "tip_source_fail": "Совет: Если один источник не работает, попробуйте другой",
         "auto_search_github": "Автопоиск GitHub",
         "swa_v2": "SWA V2",
-        "cysaw": "Cysaw",
-        "furcate": "Furcate",
         "walftech": "Walftech",
-        "steamdatabase": "steamdatabase",
         "steamautocracks_v2": "SteamAutoCracks V2 (Только ключи)",
         "sudama": "Библиотека Sudama (Только ключи)",
         "buqiuren": "Библиотека помощи манифеста (Только манифест)",
         "github_auiowu": "GitHub (Auiowu)",
-        "github_sac": "GitHub (SAC)",
         "restart_steam_title": "Перезапустить Steam",
         "restart_steam_confirm_message": "Вы уверены, что хотите перезапустить Steam?\n\nЭто закроет текущий Steam и перезапустит его.",
         "tip": "Совет",
@@ -805,15 +790,11 @@ TEXTS = {
         "tip_source_fail": "Tipp: Wenn eine Quelle fehlschlägt, versuchen Sie eine andere",
         "auto_search_github": "Automatische GitHub-Suche",
         "swa_v2": "SWA V2",
-        "cysaw": "Cysaw",
-        "furcate": "Furcate",
         "walftech": "Walftech",
-        "steamdatabase": "steamdatabase",
         "steamautocracks_v2": "SteamAutoCracks V2 (Nur Schlüssel)",
         "sudama": "Sudama-Bibliothek (Nur Schlüssel)",
         "buqiuren": "Manifest-Hilfsbibliothek (Nur Manifest)",
         "github_auiowu": "GitHub (Auiowu)",
-        "github_sac": "GitHub (SAC)",
         "restart_steam_title": "Steam neu starten",
         "restart_steam_confirm_message": "Sind Sie sicher, dass Sie Steam neu starten möchten?\n\nDies wird das aktuelle Steam schließen und neu starten.",
         "tip": "Tipp",
@@ -954,15 +935,11 @@ TEXTS = {
         "tip_source_fail": "ヒント: ソースが失敗した場合は別のソースを試してください",
         "auto_search_github": "GitHubを自動検索",
         "swa_v2": "SWA V2",
-        "cysaw": "Cysaw",
-        "furcate": "Furcate",
         "walftech": "Walftech",
-        "steamdatabase": "steamdatabase",
         "steamautocracks_v2": "SteamAutoCracks V2 (キーのみ)",
         "sudama": "Sudamaライブラリ (キーのみ)",
         "buqiuren": "マニフェストヘルパーライブラリ (マニフェストのみ)",
         "github_auiowu": "GitHub (Auiowu)",
-        "github_sac": "GitHub (SAC)",
         "restart_steam_title": "Steamを再起動",
         "restart_steam_confirm_message": "Steamを再起動してもよろしいですか？\n\n現在実行中のSteamを終了して再起動します。",
         "tip": "ヒント",
@@ -1110,15 +1087,11 @@ TEXTS = {
         "tip_source_fail": "提示: 若某個來源失敗，請嘗試其他來源",
         "auto_search_github": "自動搜尋GitHub",
         "swa_v2": "SWA V2",
-        "cysaw": "Cysaw",
-        "furcate": "Furcate",
         "walftech": "Walftech",
-        "steamdatabase": "steamdatabase",
         "steamautocracks_v2": "SteamAutoCracks V2 (僅金鑰)",
         "sudama": "Sudama 資料庫 (僅金鑰)",
         "buqiuren": "清單不求人資料庫 (僅清單)",
         "github_auiowu": "GitHub (Auiowu)",
-        "github_sac": "GitHub (SAC)",
         "restart_steam_title": "重新啟動 Steam",
         "restart_steam_confirm_message": "確定要重新啟動 Steam 嗎？\n\n這將關閉目前執行中的 Steam 並重新啟動。",
         
@@ -1841,19 +1814,38 @@ class AsyncWorker(QThread):
         super().__init__()
         self.coro = coro
         self._loop = None
+        self._cancelled = False
     
+    def cancel(self):
+        """请求取消：取消所有 asyncio 任务并关闭事件循环"""
+        self._cancelled = True
+        if self._loop and not self._loop.is_closed():
+            try:
+                self._loop.call_soon_threadsafe(self._cancel_all_tasks)
+            except Exception:
+                pass
+
+    def _cancel_all_tasks(self):
+        if self._loop and not self._loop.is_closed():
+            for task in asyncio.all_tasks(self._loop):
+                task.cancel()
+
     def run(self):
         try:
             self._loop = asyncio.new_event_loop()
             asyncio.set_event_loop(self._loop)
             result = self._loop.run_until_complete(self.coro)
-            self.result_ready.emit(result)
+            if not self._cancelled:
+                self.result_ready.emit(result)
+        except asyncio.CancelledError:
+            pass
         except Exception as e:
-            self.error.emit(str(e))
+            if not self._cancelled:
+                self.error.emit(str(e))
         finally:
             if self._loop:
                 try:
-                    pending = asyncio.all_tasks(self._loop) if hasattr(asyncio, 'all_tasks') else []
+                    pending = asyncio.all_tasks(self._loop)
                     if pending:
                         for task in pending:
                             task.cancel()
@@ -1952,9 +1944,9 @@ class HomePage(ScrollArea):
             self.card_layout = self.grid_layout
             self.card_container.setLayout(self.grid_layout)
         else:
-            self.current_view_mode = "list"
-            self.card_layout = self.list_layout
-            self.card_container.setLayout(self.list_layout)
+            self.current_view_mode = "grid"
+            self.card_layout = self.grid_layout
+            self.card_container.setLayout(self.grid_layout)
         
         self.mainLayout.addWidget(self.card_container)
         self.mainLayout.addStretch(1)
@@ -2362,10 +2354,10 @@ class HomePage(ScrollArea):
             config_path = Path.cwd() / 'config.json'
             if config_path.exists():
                 with open(config_path, 'r', encoding='utf-8') as f:
-                    return json.load(f).get(key, "list")
+                    return json.load(f).get(key, "grid")
         except Exception:
             pass
-        return "list"
+        return "grid"
 
     def load_view_mode_preference(self):
         """同步 combo UI（布局已在 __init__ 中正确设置）"""
@@ -2731,15 +2723,12 @@ class SearchPage(ScrollArea):
             "自动选择",
             "SteamAutoCracks V2",
             "SteamAutoCracks V1",
-            "SWA V2 (printedwaste)",
-            "Cysaw",
-            "Furcate",
+            tr("sac-other"),
             "Walftech",
-            "SteamDatabase",
             "Sudama",
             "清单不求人",
+            tr("MHub"),
             tr("github_auiowu"),
-            tr("github_sac"),
         ])
         self.manifest_source_combo.setCurrentIndex(0)  # 默认自动选择
         self.manifest_source_combo.setFixedWidth(200)
@@ -2780,9 +2769,9 @@ class SearchPage(ScrollArea):
             self.results_layout = self.grid_results_layout
             self.results_container.setLayout(self.grid_results_layout)
         else:
-            self.current_view_mode = "list"
-            self.results_layout = self.list_results_layout
-            self.results_container.setLayout(self.list_results_layout)
+            self.current_view_mode = "grid"
+            self.results_layout = self.grid_results_layout
+            self.results_container.setLayout(self.grid_results_layout)
         
         layout.addWidget(self.results_container)
         layout.addStretch(1)
@@ -2909,29 +2898,14 @@ class SearchPage(ScrollArea):
     
     def cleanup_workers(self):
         """清理所有worker线程"""
-        # 清理搜索worker
-        if hasattr(self, 'search_worker') and self.search_worker:
-            if self.search_worker.isRunning():
-                self.search_worker.quit()
-                self.search_worker.wait(1000)  # 最多等待1秒
-            self.search_worker.deleteLater()
-            self.search_worker = None
-        
-        # 清理解锁worker
-        if hasattr(self, 'unlock_worker') and self.unlock_worker:
-            if self.unlock_worker.isRunning():
-                self.unlock_worker.quit()
-                self.unlock_worker.wait(1000)  # 最多等待1秒
-            self.unlock_worker.deleteLater()
-            self.unlock_worker = None
-        
-        # 清理清单源保存worker
-        if hasattr(self, '_manifest_worker') and self._manifest_worker:
-            if self._manifest_worker.isRunning():
-                self._manifest_worker.quit()
-                self._manifest_worker.wait(1000)
-            self._manifest_worker.deleteLater()
-            self._manifest_worker = None
+        for attr in ('search_worker', 'unlock_worker', '_manifest_worker'):
+            worker = getattr(self, attr, None)
+            if worker:
+                if worker.isRunning():
+                    worker.cancel()
+                    worker.wait(3000)
+                worker.deleteLater()
+                setattr(self, attr, None)
     
     def on_manifest_source_changed(self):
         """清单源选择改变时保存偏好"""
@@ -2956,15 +2930,12 @@ class SearchPage(ScrollArea):
                 0: "auto",
                 1: "steamautocracks_v2",
                 2: "steamautocracks_v1",
-                3: "printedwaste",
-                4: "cysaw",
-                5: "furcate",
-                6: "walftech",
-                7: "steamdatabase",
-                8: "sudama",
-                9: "buqiuren",
-                10: "github_auiowu",
-                11: "github_sac",
+                3: "sac-other",
+                4: "walftech",
+                5: "sudama",
+                6: "buqiuren",
+                7: "MHub",
+                8: "github_auiowu",
             }
             config["default_manifest_source"] = source_mapping.get(self.manifest_source_combo.currentIndex(), "auto")
             
@@ -2974,8 +2945,9 @@ class SearchPage(ScrollArea):
         
         # 使用异步worker保存，并确保正确清理
         if hasattr(self, '_manifest_worker') and self._manifest_worker and self._manifest_worker.isRunning():
-            self._manifest_worker.quit()
+            self._manifest_worker.cancel()
             self._manifest_worker.wait()
+            self._manifest_worker = None
         
         self._manifest_worker = AsyncWorker(_save())
         self._manifest_worker.result_ready.connect(self._on_manifest_save_complete)
@@ -2985,18 +2957,12 @@ class SearchPage(ScrollArea):
     
     def _on_manifest_save_complete(self, result):
         """清单源保存完成"""
-        # 清理worker引用
-        if hasattr(self, '_manifest_worker'):
-            self._manifest_worker.deleteLater()
-            self._manifest_worker = None
+        self._manifest_worker = None
     
     def _on_manifest_save_error(self, error):
-        """清单源保存失败"""
+        """保存清单源偏好失败"""
         print(f"保存清单源偏好失败: {error}")
-        # 清理worker引用
-        if hasattr(self, '_manifest_worker'):
-            self._manifest_worker.deleteLater()
-            self._manifest_worker = None
+        self._manifest_worker = None
     
     def load_manifest_source_preference(self):
         """加载清单源选择偏好"""
@@ -3017,15 +2983,12 @@ class SearchPage(ScrollArea):
                     "auto": 0,
                     "steamautocracks_v2": 1,
                     "steamautocracks_v1": 2,
-                    "printedwaste": 3,
-                    "cysaw": 4,
-                    "furcate": 5,
-                    "walftech": 6,
-                    "steamdatabase": 7,
-                    "sudama": 8,
-                    "buqiuren": 9,
-                    "github_auiowu": 10,
-                    "github_sac": 11,
+                    "sac-other": 3,
+                    "walftech": 4,
+                    "sudama": 5,
+                    "buqiuren": 6,
+                    "MHub": 7,
+                    "github_auiowu": 8,
                 }
                 
                 index = source_mapping.get(saved_source, 0)
@@ -3067,10 +3030,10 @@ class SearchPage(ScrollArea):
             config_path = Path.cwd() / 'config.json'
             if config_path.exists():
                 with open(config_path, 'r', encoding='utf-8') as f:
-                    return json.load(f).get(key, "list")
+                    return json.load(f).get(key, "grid")
         except Exception:
             pass
-        return "list"
+        return "grid"
 
     def load_view_mode_preference(self):
         """同步 combo UI（布局已在 __init__ 中正确设置）"""
@@ -3314,7 +3277,7 @@ class SearchPage(ScrollArea):
         if hasattr(self, 'search_worker') and self.search_worker:
             try:
                 if self.search_worker.isRunning():
-                    self.search_worker.quit()
+                    self.search_worker.cancel()
                     self.search_worker.wait(5000)
             except RuntimeError:
                 pass
@@ -3536,15 +3499,12 @@ class SearchPage(ScrollArea):
             "自动选择": "auto",
             "SteamAutoCracks V2": "steamautocracks_v2",
             "SteamAutoCracks V1": "steamautocracks_v1",
-            "SWA V2 (printedwaste)": "printedwaste",
-            "Cysaw": "cysaw",
-            "Furcate": "furcate",
+            tr("sac-other"): "sac-other",
             "Walftech": "walftech",
-            "SteamDatabase": "steamdatabase",
             "Sudama": "sudama",
             "清单不求人": "buqiuren",
+            tr("MHub"): "MHub",
             tr("github_auiowu"): "Auiowu/ManifestAutoUpdate",
-            tr("github_sac"): "SteamAutoCracks/ManifestHub",
         }
         selected_source = self.manifest_source_combo.currentText()
         tool_type = source_mapping.get(selected_source, "auto")
@@ -3577,13 +3537,11 @@ class SearchPage(ScrollArea):
                     auto_sources = [
                         "steamautocracks_v2",
                         "steamautocracks_v1",
-                        "printedwaste",
-                        "cysaw",
-                        "furcate",
+                        "sac-other",
                         "walftech",
-                        "steamdatabase",
                         "sudama",
                         "buqiuren",
+                        "MHub",
                     ]
                     for src in auto_sources:
                         backend.log.info(f"[自动选择] 正在尝试源: {src}")
@@ -3600,7 +3558,7 @@ class SearchPage(ScrollArea):
                     return False
                 
                 # 指定源模式
-                zip_sources = ["printedwaste", "cysaw", "furcate", "walftech", "steamdatabase", "steamautocracks_v2", "steamautocracks_v1", "sudama", "buqiuren"]
+                zip_sources = ["sac-other", "walftech", "steamautocracks_v2", "steamautocracks_v1", "sudama", "buqiuren", "MHub"]
                 if tool_type_actual in zip_sources:
                     success = await backend.process_zip_source(
                         appid, tool_type_actual, unlocker_type,
@@ -3644,7 +3602,10 @@ class SearchPage(ScrollArea):
 
             if choice[0] == "cancel":
                 # 取消入库：停止当前任务，不启动新任务
-                self.unlock_worker.quit()
+                self.unlock_worker.cancel()
+                self.unlock_worker.wait()
+                self.unlock_worker.deleteLater()
+                self.unlock_worker = None
                 InfoBar.info(
                     title="已取消",
                     content="入库任务已取消",
@@ -3657,21 +3618,19 @@ class SearchPage(ScrollArea):
                 # 继续入库（cancelButton）：不做任何事
                 return
             else:
-                # 换成当前清单入库（yesButton）：停止当前任务后启动新任务
+                # 换成当前清单入库（yesButton）：取消当前任务后启动新任务
                 old_worker = self.unlock_worker
                 self.unlock_worker = None
+                old_worker.cancel()
+                old_worker.wait()  # 阻塞直到线程真正结束
+                old_worker.deleteLater()
 
-                def _start_new_after_stop():
-                    new_worker = AsyncWorker(_unlock())
-                    new_worker.result_ready.connect(self.on_unlock_complete)
-                    new_worker.error.connect(self.on_unlock_error)
-                    new_worker.finished.connect(new_worker.deleteLater)
-                    self.unlock_worker = new_worker
-                    new_worker.start()
-
-                old_worker.finished.connect(old_worker.deleteLater)
-                old_worker.finished.connect(_start_new_after_stop)
-                old_worker.quit()
+                new_worker = AsyncWorker(_unlock())
+                new_worker.result_ready.connect(self.on_unlock_complete)
+                new_worker.error.connect(self.on_unlock_error)
+                new_worker.finished.connect(new_worker.deleteLater)
+                self.unlock_worker = new_worker
+                new_worker.start()
                 return
 
         self.unlock_worker = AsyncWorker(_unlock())
@@ -3888,12 +3847,11 @@ class LauncherPage(ScrollArea):
         log_header.addWidget(clear_btn)
         log_layout.addLayout(log_header)
 
-        from PyQt6.QtWidgets import QTextEdit
-        self.log_view = QTextEdit(log_card)
+        self.log_view = TextEdit(log_card)
         self.log_view.setReadOnly(True)
         self.log_view.setFixedHeight(220)
         self.log_view.setStyleSheet(
-            "QTextEdit { background: rgba(0,0,0,0.15); border-radius: 6px; "
+            "TextEdit { background: rgba(0,0,0,0.15); border-radius: 6px; "
             "font-family: Consolas, monospace; font-size: 12px; padding: 8px; }"
         )
         log_layout.addWidget(self.log_view)
@@ -4126,11 +4084,13 @@ class SettingsPage(ScrollArea):
         app_config_card.setBorderRadius(8)
         
         # 调试模式
-        self.debug_check = CheckBox(tr("enable_debug_log"))
+        self.debug_check = SwitchButton()
+        self.debug_check.setChecked(False)
         app_config_card.addGroup(FluentIcon.DEVELOPER_TOOLS, tr("debug_mode"), tr("debug_mode_hint"), self.debug_check)
         
         # 保存日志文件
-        self.logging_check = CheckBox(tr("save_logs_to_file"))
+        self.logging_check = SwitchButton()
+        self.logging_check.setChecked(True)
         app_config_card.addGroup(FluentIcon.SAVE, tr("save_log_files"), tr("save_log_files_hint"), self.logging_check)
         
         # 强制解锁工具模式
@@ -4141,7 +4101,8 @@ class SettingsPage(ScrollArea):
         app_config_card.addGroup(FluentIcon.SETTING, tr("unlocker_mode"), tr("force_unlocker_hint"), self.unlocker_combo)
         
         # SteamTools固定版本模式（全局设置）
-        self.st_fixed_check = CheckBox(tr("st_fixed_enable"))
+        self.st_fixed_check = SwitchButton()
+        self.st_fixed_check.setChecked(False)
         self.st_fixed_check.setToolTip(tr("st_fixed_tooltip"))
         app_config_card.addGroup(FluentIcon.SETTING, tr("st_settings"), tr("st_settings_hint"), self.st_fixed_check)
         
@@ -4235,12 +4196,11 @@ class SettingsPage(ScrollArea):
         log_header.addWidget(clear_log_btn)
         log_card_layout.addLayout(log_header)
 
-        from PyQt6.QtWidgets import QTextEdit
-        self.log_view = QTextEdit(log_card)
+        self.log_view = TextEdit(log_card)
         self.log_view.setReadOnly(True)
         self.log_view.setFixedHeight(200)
         self.log_view.setStyleSheet(
-            "QTextEdit { background: rgba(0,0,0,0.12); border-radius: 6px; "
+            "TextEdit { background: rgba(0,0,0,0.12); border-radius: 6px; "
             "font-family: Consolas, monospace; font-size: 12px; padding: 8px; }"
         )
         log_card_layout.addWidget(self.log_view)
@@ -4253,11 +4213,6 @@ class SettingsPage(ScrollArea):
         self.reset_btn.clicked.connect(self.reset_settings)
         self.reset_btn.setFixedWidth(120)
         button_layout.addWidget(self.reset_btn)
-        
-        self.about_btn = PushButton(tr("about"))
-        self.about_btn.clicked.connect(self.show_about)
-        self.about_btn.setFixedWidth(80)
-        button_layout.addWidget(self.about_btn)
         
         self.thanks_btn = PushButton(tr("thanks"))
         self.thanks_btn.clicked.connect(self.show_thanks)
@@ -4340,9 +4295,9 @@ class SettingsPage(ScrollArea):
         
         # 复选框
         if self.debug_check:
-            self.debug_check.stateChanged.connect(self._on_setting_changed)
+            self.debug_check.checkedChanged.connect(self._on_setting_changed)
         if self.logging_check:
-            self.logging_check.stateChanged.connect(self._on_setting_changed)
+            self.logging_check.checkedChanged.connect(self._on_setting_changed)
         
         # 下拉框
         if self.unlocker_combo:
@@ -4350,7 +4305,7 @@ class SettingsPage(ScrollArea):
         
         # SteamTools固定版本
         if self.st_fixed_check:
-            self.st_fixed_check.stateChanged.connect(self._on_setting_changed)
+            self.st_fixed_check.checkedChanged.connect(self._on_setting_changed)
         
         # DLC 超时时间
         if self.dlc_timeout_spinbox:
@@ -4504,60 +4459,80 @@ class SettingsPage(ScrollArea):
             pass
         return "zh_CN"
     
-    def show_about(self):
-        """显示关于对话框"""
-        about_text = """Cai Install - Fluent Design 版本
-
-版本: 1.7
-
-这是一个基于 PyQt6-Fluent-Widgets 的现代化 Steam 游戏解锁工具。
-
-功能特性:
-• Fluent Design 设计风格
-• 支持多种清单源
-• 游戏搜索和入库
-• 已入库游戏管理
-• 主题自定义
-
-项目地址: https://github.com/zhouchentao666/Cai-install-Fluent-GUI"""
-        
-        dialog = MessageBox(tr("about_title"), about_text, self.window())
-        dialog.exec()
-    
     def show_thanks(self):
         """显示鸣谢对话框"""
-        thanks_text = """特别鸣谢
+        from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QWidget
+        from PyQt6.QtCore import Qt
 
-开发者:
-• zhouchentao666 - 制作人员
+        def add_section(layout, title):
+            lbl = BodyLabel(title)
+            lbl.setStyleSheet("font-weight: bold; margin-top: 8px;")
+            layout.addWidget(lbl)
 
-开源项目:
-• PyQt6 - Qt6 Python 绑定
-• PyQt-Fluent-Widgets - Fluent Design 组件库
-• Cai-install-Web-GUI - 原始项目作者
-• httpx - 异步 HTTP 客户端
+        def add_text(layout, text):
+            lbl = BodyLabel(text)
+            lbl.setWordWrap(True)
+            layout.addWidget(lbl)
 
-清单源提供:
-• SWA V2
-• Cysaw
-• Furcate
-• Walftech
-• steamdatabase
-• SteamAutoCracks
-• Sudama
-• 清单不求人
+        def add_link(layout, label, url):
+            row = QHBoxLayout()
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(4)
+            prefix = BodyLabel("•")
+            btn = HyperlinkButton(url, label)
+            row.addWidget(prefix)
+            row.addWidget(btn)
+            row.addStretch(1)
+            layout.addLayout(row)
 
-社区与联系:
-• GitHub: https://github.com/zhouchentao666/Fluent-Install
-• 加入 Q 群: https://qm.qq.com/q/gtTLap5Jw4
-• TG 群组: https://t.me/+vTrqXKpRJE9kNmVl
-• TG 频道: https://t.me/FluentInstall
-• Discord: https://discord.gg/2qh68QRMuA
+        class ThanksDialog(MessageBoxBase):
+            def __init__(self, parent=None):
+                super().__init__(parent)
+                self.titleLabel = TitleLabel(tr("thanks_title"), self)
 
-感谢所有为本项目做出贡献的开发者和用户！"""
-        
-        dialog = MessageBox(tr("thanks_title"), thanks_text, self.window())
-        dialog.exec()
+                scroll = SingleDirectionScrollArea(orient=Qt.Orientation.Vertical)
+                scroll.setWidgetResizable(True)
+                scroll.setFixedHeight(360)
+                scroll.enableTransparentBackground()
+
+                inner = QWidget()
+                inner_layout = QVBoxLayout(inner)
+                inner_layout.setContentsMargins(4, 4, 4, 4)
+                inner_layout.setSpacing(2)
+
+                add_section(inner_layout, "开发者")
+                add_text(inner_layout, "• zhouchentao666 - 制作人员")
+
+                add_section(inner_layout, "开源项目")
+                add_link(inner_layout, "PyQt6", "https://pypi.org/project/PyQt6/")
+                add_link(inner_layout, "PyQt-Fluent-Widgets", "https://github.com/zhiyiYo/PyQt-Fluent-Widgets")
+                add_link(inner_layout, "Cai-install-Web-GUI", "https://github.com/ikunshare/Onekey")
+                add_link(inner_layout, "httpx", "https://www.python-httpx.org/")
+
+                add_section(inner_layout, "清单源提供")
+                for src in ["SWA V2", "Walftech", "SteamAutoCracks", "Sudama", "清单不求人"]:
+                    add_text(inner_layout, f"• {src}")
+
+                add_section(inner_layout, "社区与联系")
+                add_link(inner_layout, "GitHub", "https://github.com/zhouchentao666/Fluent-Install")
+                add_link(inner_layout, "加入 Q 群", "https://qm.qq.com/q/gtTLap5Jw4")
+                add_link(inner_layout, "TG 群组", "https://t.me/+vTrqXKpRJE9kNmVl")
+                add_link(inner_layout, "TG 频道", "https://t.me/FluentInstall")
+                add_link(inner_layout, "Discord", "https://discord.gg/2qh68QRMuA")
+
+                add_text(inner_layout, "\n感谢所有为本项目做出贡献的开发者和用户！")
+                inner_layout.addStretch(1)
+
+                scroll.setWidget(inner)
+
+                self.viewLayout.addWidget(self.titleLabel)
+                self.viewLayout.addWidget(scroll)
+
+                self.yesButton.setText("OK")
+                self.cancelButton.hide()
+                self.widget.setMinimumWidth(420)
+
+        ThanksDialog(self.window()).exec()
     
     def show_donate(self):
         """显示捐赠对话框"""
@@ -4570,6 +4545,7 @@ class SettingsPage(ScrollArea):
             def __init__(self, parent=None):
                 super().__init__(parent)
                 self.titleLabel = TitleLabel(tr("donate_title"), self)
+                self._nam = QNetworkAccessManager(self)  # 绑定到 dialog，随 dialog 销毁
 
                 desc = BodyLabel(tr("donate_desc"), self)
                 desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -4603,35 +4579,37 @@ class SettingsPage(ScrollArea):
                 self.cancelButton.hide()
                 self.widget.setMinimumWidth(480)
 
-        dialog = DonateDialog(self.window())
+                self._load_image(wechat_url, self.wechat_img)
+                self._load_image(alipay_url, self.alipay_img)
 
-        self._donate_nam = QNetworkAccessManager()
+            def _load_image(self, url, label):
+                reply = self._nam.get(QNetworkRequest(QUrl(url)))
 
-        def make_handler(reply, label):
-            def on_finished():
-                if reply.error() == QNetworkReply.NetworkError.NoError:
-                    data = reply.readAll()
-                    pixmap = QPixmap()
-                    pixmap.loadFromData(data)
-                    if not pixmap.isNull():
-                        label.setPixmap(pixmap.scaled(200, 200, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
-                        label.setText("")
-                    else:
+                def on_finished():
+                    try:
+                        if reply.error() == QNetworkReply.NetworkError.NoError:
+                            pixmap = QPixmap()
+                            pixmap.loadFromData(reply.readAll())
+                            if not pixmap.isNull():
+                                label.setPixmap(pixmap.scaled(
+                                    200, 200,
+                                    Qt.AspectRatioMode.KeepAspectRatio,
+                                    Qt.TransformationMode.SmoothTransformation
+                                ))
+                                label.setText("")
+                                return
                         label.setText(tr("donate_load_failed"))
-                else:
-                    label.setText(tr("donate_load_failed"))
-            return on_finished
+                    except RuntimeError:
+                        pass  # dialog 已关闭，label 已销毁，忽略
+                    finally:
+                        reply.deleteLater()
+
+                reply.finished.connect(on_finished)
 
         wechat_url = "https://pub-141831e61e69445289222976a15b6fb3.r2.dev/Image_to_url_V2/6188237576876003069_121-imagetourl.cloud-1774005513945-35nyye.jpg"
         alipay_url = "https://pub-141831e61e69445289222976a15b6fb3.r2.dev/Image_to_url_V2/6188237576876003068_121-imagetourl.cloud-1774005511802-siuw87.jpg"
 
-        reply1 = self._donate_nam.get(QNetworkRequest(QUrl(wechat_url)))
-        reply1.finished.connect(make_handler(reply1, dialog.wechat_img))
-
-        reply2 = self._donate_nam.get(QNetworkRequest(QUrl(alipay_url)))
-        reply2.finished.connect(make_handler(reply2, dialog.alipay_img))
-
-        dialog.exec()
+        DonateDialog(self.window()).exec()
     
     def load_config(self):
         """加载配置（同步读取本地文件，避免卡顿）"""
@@ -4949,7 +4927,7 @@ class MainWindow(MSFluentWindow):
     
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(tr("app_title"))
+        self.setWindowTitle(tr("app_title") + f"  v{CURRENT_VERSION}")
         self.resize(1000, 700)
         
         # 设置窗口图标为Fluent内置的下载图标
@@ -5170,6 +5148,30 @@ def main():
     theme_config = load_theme_config()
     
     app = QApplication(sys.argv)
+    
+    # fluent 使用 setPixelSize 设置字体，导致 pointSize() 返回 -1
+    # Qt 内部在字体继承时读取 pointSize 并尝试 setPointSize(-1) 触发警告
+    # 用消息过滤器屏蔽这条无害警告
+    import ctypes
+    def qt_message_handler(mode, context, message):
+        if "Point size <= 0" in message or "setPointSize" in message:
+            return
+        # 其他消息正常输出
+        if mode == QtMsgType.QtWarningMsg:
+            print(f"[Qt Warning] {message}")
+        elif mode == QtMsgType.QtCriticalMsg:
+            print(f"[Qt Critical] {message}")
+        elif mode == QtMsgType.QtFatalMsg:
+            print(f"[Qt Fatal] {message}")
+
+    from PyQt6.QtCore import qInstallMessageHandler, QtMsgType
+    qInstallMessageHandler(qt_message_handler)
+
+    from PyQt6.QtWidgets import QToolTip
+    from PyQt6.QtGui import QFont
+    tooltip_font = QFont()
+    tooltip_font.setPointSize(9)
+    QToolTip.setFont(tooltip_font)
     
     # 设置语言环境
     if lang in LANGUAGES:
