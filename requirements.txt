@@ -8,6 +8,7 @@ PyQt6-Fluent-Widgets>=1.5.0
 
 # 现有依赖（从原项目继承）
 httpx>=0.24.0
+socksio>=1.0.0
 aiofiles>=23.0.0
 ujson>=5.8.0
 colorlog>=6.7.0

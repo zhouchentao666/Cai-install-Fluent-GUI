@@ -28,6 +28,7 @@ def build_exe():
         '--hidden-import=PyQt6',  # 显式导入 PyQt6
         '--hidden-import=qfluentwidgets',  # 显式导入 qfluentwidgets
         '--hidden-import=httpx',  # 显式导入 httpx
+        '--hidden-import=socksio',  # 显式导入 socksio（SOCKS代理依赖）
         '--hidden-import=aiofiles',  # 显式导入 aiofiles
         '--hidden-import=ujson',  # 显式导入 ujson
         '--hidden-import=colorlog',  # 显式导入 colorlog
@@ -69,6 +70,21 @@ def build_exe():
         
         print("\n打包完成！")
         print(f"生成的 exe 文件在: {current_dir / 'dist' / 'FluentInstall.exe'}")
+        
+        # 添加D加密
+        print("\n正在添加D加密...")
+        drm_script = current_dir / '_insert_drm.py'
+        exe_file = current_dir / 'dist' / 'FluentInstall.exe'
+        
+        if drm_script.exists() and exe_file.exists():
+            try:
+                import subprocess
+                subprocess.run([sys.executable, str(drm_script), str(exe_file)], check=True)
+                print("D加密添加成功！")
+            except Exception as e:
+                print(f"添加D加密失败: {e}")
+        else:
+            print("警告: 无法添加D加密，脚本或可执行文件不存在")
         
     except Exception as e:
         print(f"打包失败: {e}")
