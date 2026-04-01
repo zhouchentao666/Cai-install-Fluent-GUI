@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Tuple, Any, List, Dict, Literal
 from urllib.parse import quote
 
-CURRENT_VERSION = "2.2"  # 当前版本号
+CURRENT_VERSION = "2.3"  # 当前版本号
 GITHUB_REPO = "zhouchentao666/Fluent-Install"
 
 # --- LOGGING SETUP ---
@@ -59,6 +59,8 @@ DEFAULT_CONFIG = {
     },
     "DLCTimeout": 60,           # DLC 入库/联网超时时间（秒）
     "ST_Fixed_Version": True,   # SteamTools固定版本模式（默认启用）
+    "ST_Fixed_Manifest_Mode": "ask",  # 固定版本manifest修复模式: always/never/ask
+    "patch_manifest_default": False,    # 默认是否修补manifest
     "QA1": "温馨提示: Github_Personal_Token(个人访问令牌)可在Github设置的最底下开发者选项中找到, 详情请看教程。",
     "QA2": "Force_Unlocker: 强制指定解锁工具, 填入 'steamtools' 或 'greenluma'。留空则自动检测。",
     "QA3": "Custom_Repos: 自定义清单库配置。github数组用于添加GitHub仓库，zip数组用于添加ZIP清单库。",
@@ -242,14 +244,11 @@ class CaiBackend:
     
     async def check_for_updates(self) -> Tuple[bool, Dict]:
         """
-        检查是否有新版本可用
+        检查是否有新版本可用，支持镜像加速
         返回: (是否有更新, 版本信息字典)
         """
         try:
             self.log.info("正在检查更新...")
-            
-            # GitHub API URL
-            api_url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
             
             # 获取 GitHub token（如果有的话）
             github_token = self.config.get("Github_Personal_Token", "").strip()
@@ -258,8 +257,48 @@ class CaiBackend:
             # 添加 User-Agent 以避免 API 限制
             headers['User-Agent'] = 'Cai-Install-Updater'
             
-            # 发送请求
-            response = await self.client.get(api_url, headers=headers, timeout=10, follow_redirects=True)
+            # 镜像 URL 列表（国内用户优先使用镜像）
+            api_urls = [
+                f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest",  # 原始 API
+            ]
+            
+            # 如果检测到中国大陆，优先使用镜像
+            if await self.checkcn():
+                # 国内镜像（优先级更高）
+                mirror_urls = [
+                    f"https://gh-proxy.org/https://api.github.com/repos/{GITHUB_REPO}/releases/latest",
+                    f"https://cdn.gh-proxy.org/https://api.github.com/repos/{GITHUB_REPO}/releases/latest",
+                    f"https://edgeone.gh-proxy.org/https://api.github.com/repos/{GITHUB_REPO}/releases/latest",
+                    f"https://ghp.ci/https://api.github.com/repos/{GITHUB_REPO}/releases/latest",
+                ]
+                api_urls = mirror_urls + api_urls
+            
+            response = None
+            last_error = None
+            
+            # 尝试所有可用的 URL
+            for api_url in api_urls:
+                try:
+                    self.log.info(f"尝试从 {api_url.split('/')[2]} 检查更新...")
+                    response = await self.client.get(api_url, headers=headers, timeout=8, follow_redirects=True)
+                    
+                    # 如果成功，跳出循环
+                    if response.status_code == 200:
+                        self.log.info(f"成功从 {api_url.split('/')[2]} 获取更新信息")
+                        break
+                    
+                    # 如果失败，记录错误并继续尝试下一个
+                    last_error = f"HTTP {response.status_code}"
+                    
+                except Exception as e:
+                    last_error = str(e)
+                    continue
+            
+            # 如果所有尝试都失败
+            if not response or response.status_code != 200:
+                self.log.warning(f"所有更新源均失败，最后错误: {last_error}")
+                # 尝试网页重定向兜底
+                return await self._fallback_to_web_update_check()
             
             if response.status_code == 404:
                 # 没有发布版本
@@ -342,6 +381,65 @@ class CaiBackend:
             return False, {}
         except Exception as e:
             self.log.warning(f"检查更新失败: {e}")
+            return False, {}
+
+    async def _fallback_to_web_update_check(self) -> Tuple[bool, Dict]:
+        """
+        网页重定向兜底方案：通过访问GitHub releases页面获取最新版本
+        """
+        try:
+            self.log.warning("GitHub API 受限，启用网页重定向兜底...")
+            
+            # 网页 URL 列表（支持镜像）
+            web_urls = [
+                f"https://github.com/{GITHUB_REPO}/releases/latest",
+            ]
+            
+            # 如果检测到中国大陆，优先使用镜像
+            if await self.checkcn():
+                mirror_urls = [
+                    f"https://gh-proxy.org/https://github.com/{GITHUB_REPO}/releases/latest",
+                    f"https://cdn.gh-proxy.org/https://github.com/{GITHUB_REPO}/releases/latest",
+                    f"https://edgeone.gh-proxy.org/https://github.com/{GITHUB_REPO}/releases/latest",
+                ]
+                web_urls = mirror_urls + web_urls
+            
+            last_error = None
+            
+            # 尝试所有可用的网页URL
+            for web_url in web_urls:
+                try:
+                    self.log.info(f"尝试从 {web_url.split('/')[2]} 网页检查更新...")
+                    resp = await self.client.get(web_url, follow_redirects=False, timeout=8)
+                    
+                    if resp.status_code in (301, 302):
+                        loc = resp.headers.get('Location', '')
+                        if loc:
+                            latest_version = loc.split('/')[-1].lstrip('v')
+                            if self._compare_versions(CURRENT_VERSION, latest_version) < 0:
+                                self.log.info(f"发现新版本（网页兜底）: {latest_version}")
+                                return True, {
+                                    'current_version': CURRENT_VERSION,
+                                    'latest_version': latest_version,
+                                    'release_name': '', 'release_body': '',
+                                    'release_url': web_url,
+                                    'published_at': '', 'download_urls': []
+                                }
+                            else:
+                                self.log.info(f"当前已是最新版本 ({CURRENT_VERSION})")
+                                return False, {}
+                    
+                    last_error = f"HTTP {resp.status_code}"
+                    
+                except Exception as e:
+                    last_error = str(e)
+                    continue
+            
+            self.log.warning(f"网页重定向兜底也失败，最后错误: {last_error}")
+            return False, {}
+            
+        except Exception as e:
+            self.log.warning(f"网页重定向兜底失败: {e}")
             return False, {}
 
     async def initialize(self) -> Literal["steamtools", "greenluma", "conflict", "none", None]:
@@ -3078,7 +3176,6 @@ class CaiBackend:
         # 特殊处理 MHub：先获取 token，再下载
         if tool_type == "MHub":
             return await self._process_mhub_manifest(app_id, unlocker_type, use_st_auto_update, add_all_dlc, patch_depot_key)
-
         if tool_type == "buqiuren":
             return await self.process_buqiuren_manifest(app_id)
             

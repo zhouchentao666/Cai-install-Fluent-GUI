@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional
 from PyQt6.QtCore import Qt, QSize, pyqtSignal, QThread, pyqtSlot, QUrl, QLocale, QTranslator, QObject, QTimer
 from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel
+from PyQt6.QtGui import QIntValidator
 from PyQt6.QtGui import QIcon, QPixmap, QFont, QDesktopServices
 from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
 from qfluentwidgets import (
@@ -22,7 +23,8 @@ from qfluentwidgets import (
     TransparentToolButton, IconWidget, FlowLayout, SearchLineEdit,
     PrimaryPushButton, CheckBox, GroupHeaderCardWidget, InfoBarIcon,
     SpinBox, HyperlinkButton, MessageBoxBase, TitleLabel,
-    RoundMenu, Action, TextEdit, SingleDirectionScrollArea, ProgressBar, ToolTipFilter, ToolTipPosition
+    RoundMenu, Action, TextEdit, SingleDirectionScrollArea, ProgressBar, ToolTipFilter, ToolTipPosition,
+    Slider
 )
 
 # 导入后端
@@ -143,6 +145,7 @@ TEXTS = {
         "add_options": "入库选项",
         "add_all_dlc": "添加所有 DLC",
         "patch_depot_key": "修补 Depot Key",
+        "patch_manifest": "修补 Manifest",
         "manifest_source": "清单源:",
         "view_mode": "视图",
         "sort_mode": "排序",
@@ -166,6 +169,8 @@ TEXTS = {
         "thanks": "鸣谢",
         "restart_required": "需要重启",
         "language_changed": "语言已更改为 {0}\n\n是否立即重启应用以应用更改？",
+        "theme_mode_changed": "主题模式已更改为 {0}\n\n是否立即重启应用以应用更改？",
+        "theme_color_changed": "主题颜色已更改为 {0}\n\n是否立即重启应用以应用更改？",
         "restart_steam_confirm": "重启 Steam",
         "restart_steam_message": "确定要重启 Steam 吗？\n\n这将关闭当前运行的 Steam 并重新启动。",
         "total_games": "共 {0} 个游戏 | SteamTools: {1} | GreenLuma: {2}",
@@ -231,8 +236,6 @@ TEXTS = {
         "already_latest": "已是最新版本",
         "already_latest_content": "当前已是最新版本，无需更新。",
         "check_update_failed": "检查更新失败",
-        "restart_steam_title": "重启 Steam",
-        "restart_steam_confirm_message": "确定要重启 Steam 吗？\n\n这将关闭当前运行的 Steam 并重新启动。",
         
         # 缺失的翻译键
         "tip": "提示",
@@ -275,8 +278,13 @@ TEXTS = {
         "toggle_version_mode": "切换版本模式",
         "st_settings": "SteamTools 设置",
         "st_settings_hint": "控制SteamTools文件的版本管理模式",
-        "st_fixed_enable": "启用 SteamTools 固定版本模式",
+        "st_fixed_enable": "固定版本",
         "st_fixed_tooltip": "新添加的SteamTools文件默认使用固定版本模式",
+        "st_fixed_manifest_mode": "固定版本Manifest修复",
+        "st_fixed_manifest_mode_hint": "主页切换至固定版本时是否自动修复manifest",
+        "st_fixed_manifest_always": "始终",
+        "st_fixed_manifest_never": "从不",
+        "st_fixed_manifest_ask": "询问",
         "dlc_timeout": "DLC 联网超时时间",
         "dlc_timeout_hint": "获取DLC列表超时时间，网络较差时可适当调大（秒）",
         "name_not_found": "名称未找到",
@@ -308,6 +316,7 @@ TEXTS = {
         "add_options": "Add Options",
         "add_all_dlc": "Add All DLC",
         "patch_depot_key": "Patch Depot Key",
+        "patch_manifest": "Patch Manifest",
         "manifest_source": "Manifest Source:",
         "add_game": "Add Game",
         "steam_path": "Steam Path",
@@ -321,6 +330,8 @@ TEXTS = {
         "thanks": "Credits",
         "restart_required": "Restart Required",
         "language_changed": "Language changed to {0}\n\nRestart the application now to apply changes?",
+        "theme_mode_changed": "Theme mode changed to {0}\n\nRestart the application now to apply changes?",
+        "theme_color_changed": "Theme color changed to {0}\n\nRestart the application now to apply changes?",
         "restart_steam_confirm": "Restart Steam",
         "restart_steam_message": "Are you sure you want to restart Steam?\n\nThis will close the currently running Steam and restart it.",
         "total_games": "Total: {0} games | SteamTools: {1} | GreenLuma: {2}",
@@ -382,8 +393,6 @@ TEXTS = {
         "already_latest": "Already Up to Date",
         "already_latest_content": "You are running the latest version.",
         "check_update_failed": "Check Update Failed",
-        "restart_steam_title": "Restart Steam",
-        "restart_steam_confirm_message": "Are you sure you want to restart Steam?\n\nThis will close the currently running Steam and restart it.",
         
         # 缺失的翻译键
         "tip": "Tip",
@@ -427,6 +436,11 @@ TEXTS = {
         "st_settings_hint": "Control SteamTools file version management mode",
         "st_fixed_enable": "Enable SteamTools Fixed Version Mode",
         "st_fixed_tooltip": "New SteamTools files will use fixed version mode by default",
+        "st_fixed_manifest_mode": "Fixed Version Manifest Repair",
+        "st_fixed_manifest_mode_hint": "Whether to auto repair manifest when switching to fixed version on home page",
+        "st_fixed_manifest_always": "Always",
+        "st_fixed_manifest_never": "Never",
+        "st_fixed_manifest_ask": "Ask",
         "dlc_timeout": "DLC Network Timeout",
         "dlc_timeout_hint": "Timeout for fetching DLC list, increase if network is slow (seconds)",
         "name_not_found": "Name Not Found",
@@ -458,6 +472,7 @@ TEXTS = {
         "add_options": "Options d'ajout",
         "add_all_dlc": "Ajouter tous les DLC",
         "patch_depot_key": "Patch clé de dépôt",
+        "patch_manifest": "Patch Manifest",
         "manifest_source": "Source du manifeste:",
         "add_game": "Ajouter un jeu",
         "steam_path": "Chemin Steam",
@@ -474,6 +489,8 @@ TEXTS = {
         "thanks": "Crédits",
         "restart_required": "Redémarrage requis",
         "language_changed": "Langue changée en {0}\n\nRedémarrer l'application maintenant pour appliquer les changements?",
+        "theme_mode_changed": "Mode du thème changé en {0}\n\nRedémarrer l'application maintenant pour appliquer les changements?",
+        "theme_color_changed": "Couleur du thème changée en {0}\n\nRedémarrer l'application maintenant pour appliquer les changements?",
         "restart_steam_confirm": "Redémarrer Steam",
         "restart_steam_message": "Êtes-vous sûr de vouloir redémarrer Steam?\n\nCela fermera Steam en cours et le redémarrera.",
         "total_games": "Total: {0} jeux | SteamTools: {1} | GreenLuma: {2}",
@@ -542,42 +559,6 @@ TEXTS = {
         "check_update_failed": "Échec de la vérification",
         "restart_steam_title": "Redémarrer Steam",
         "restart_steam_confirm_message": "Êtes-vous sûr de vouloir redémarrer Steam?\n\nCela fermera Steam en cours et le redémarrera.",
-        "drm_page_title": "Autorisation D-Chiffrement",
-        "drm_step1": "Étape 1: Obtenir le fichier d'autorisation",
-        "drm_cw_file": "Fichier CW",
-        "drm_cw_file_hint": "Sélectionner le fichier .cw local et déchiffrer",
-        "drm_cw_placeholder": "Sélectionner le fichier d'autorisation .cw",
-        "drm_browse": "Parcourir",
-        "drm_decrypt": "Déchiffrer",
-        "drm_auth_code": "Code d'autorisation",
-        "drm_auth_code_hint": "Télécharger le fichier CW en ligne via le code d'autorisation",
-        "drm_auth_code_placeholder": "Entrer le code d'autorisation",
-        "drm_download_decrypt": "Télécharger & Déchiffrer",
-        "drm_online_auth": "Obtenir l'autorisation en ligne",
-        "drm_online_auth_hint": "Visiter les sites d'autorisation externes",
-        "drm_extract_title": "Obtenir le fichier CW (Extraction locale)",
-        "drm_extract_hint": "Nécessite la connexion Steam et la possession du jeu",
-        "drm_extract_placeholder": "Entrer l'AppID du jeu (doit posséder le jeu)",
-        "drm_gen_authcode": "Générer le code d'autorisation",
-        "drm_extract_cw": "Extraire CW localement",
-        "drm_info_title": "Informations d'autorisation",
-        "drm_valid_from": "Valide à partir de",
-        "drm_valid_to": "Valide jusqu'à",
-        "drm_step2": "Étape 2: Autorisation mode GL (SteamTools)",
-        "drm_gl_hint": "Écrire le ticket d'autorisation dans le répertoire SteamTools",
-        "drm_gl_btn": "Autoriser (GL/SteamTools)",
-        "drm_log": "Journal",
-        "drm_nav": "D-Chiffrement",
-        "drm_tip_select_cw": "Veuillez d'abord sélectionner un fichier CW",
-        "drm_tip_enter_code": "Veuillez entrer un code d'autorisation",
-        "drm_tip_decrypt_first": "Veuillez d'abord déchiffrer le fichier CW",
-        "drm_tip_valid_appid": "Veuillez entrer un AppID valide",
-        "drm_missing_dep": "Dépendance manquante",
-        "drm_missing_dep_hint": "Veuillez installer pycryptodome: pip install pycryptodome",
-        "drm_decrypt_failed": "Échec du déchiffrement",
-        "drm_download_failed": "Échec du téléchargement",
-        "drm_auth_success": "Autorisation réussie",
-        "drm_auth_failed": "Autorisation échouée",
         "tip": "Astuce",
         "recognition_success": "Reconnaissance réussie",
         "game_not_found": "Jeu non trouvé",
@@ -620,6 +601,11 @@ TEXTS = {
         "st_settings_hint": "Contrôler le mode de gestion des versions des fichiers SteamTools",
         "st_fixed_enable": "Activer le mode version fixe SteamTools",
         "st_fixed_tooltip": "Les nouveaux fichiers SteamTools utiliseront le mode version fixe par défaut",
+        "st_fixed_manifest_mode": "Réparation Manifest version fixe",
+        "st_fixed_manifest_mode_hint": "Réparer automatiquement le manifest lors du passage en version fixe",
+        "st_fixed_manifest_always": "Toujours",
+        "st_fixed_manifest_never": "Jamais",
+        "st_fixed_manifest_ask": "Demander",
         "dlc_timeout": "Délai réseau DLC",
         "dlc_timeout_hint": "Délai d'attente pour récupérer la liste DLC, augmenter si le réseau est lent (secondes)",
         "name_not_found": "Nom introuvable",
@@ -651,6 +637,7 @@ TEXTS = {
         "add_options": "Опции добавления",
         "add_all_dlc": "Добавить все DLC",
         "patch_depot_key": "Патч ключ депо",
+        "patch_manifest": "Патч манифеста",
         "manifest_source": "Источник манифеста:",
         "add_game": "Добавить игру",
         "steam_path": "Путь Steam",
@@ -667,6 +654,8 @@ TEXTS = {
         "thanks": "Благодарности",
         "restart_required": "Требуется перезапуск",
         "language_changed": "Язык изменен на {0}\n\nПерезапустить приложение сейчас для применения изменений?",
+        "theme_mode_changed": "Режим темы изменен на {0}\n\nПерезапустить приложение сейчас для применения изменений?",
+        "theme_color_changed": "Цвет темы изменен на {0}\n\nПерезапустить приложение сейчас для применения изменений?",
         "restart_steam_confirm": "Перезапустить Steam",
         "restart_steam_message": "Вы уверены, что хотите перезапустить Steam?\n\nЭто закроет текущий Steam и перезапустит его.",
         "total_games": "Всего: {0} игр | SteamTools: {1} | GreenLuma: {2}",
@@ -735,42 +724,6 @@ TEXTS = {
         "check_update_failed": "Ошибка проверки",
         "restart_steam_title": "Перезапустить Steam",
         "restart_steam_confirm_message": "Вы уверены, что хотите перезапустить Steam?\n\nЭто закроет текущий Steam и перезапустит его.",
-        "drm_page_title": "Авторизатор D-Шифрования",
-        "drm_step1": "Шаг 1: Получить файл авторизации",
-        "drm_cw_file": "CW файл",
-        "drm_cw_file_hint": "Выберите локальный .cw файл и расшифруйте",
-        "drm_cw_placeholder": "Выберите файл авторизации .cw",
-        "drm_browse": "Обзор",
-        "drm_decrypt": "Расшифровать",
-        "drm_auth_code": "Код авторизации",
-        "drm_auth_code_hint": "Скачать CW файл онлайн через код авторизации",
-        "drm_auth_code_placeholder": "Введите код авторизации",
-        "drm_download_decrypt": "Скачать & Расшифровать",
-        "drm_online_auth": "Получить авторизацию онлайн",
-        "drm_online_auth_hint": "Посетить внешние сайты авторизации",
-        "drm_extract_title": "Получить CW файл (Локальное извлечение)",
-        "drm_extract_hint": "Требуется вход в Steam и владение игрой",
-        "drm_extract_placeholder": "Введите AppID игры (должен владеть игрой)",
-        "drm_gen_authcode": "Сгенерировать код авторизации",
-        "drm_extract_cw": "Локально извлечь CW",
-        "drm_info_title": "Информация авторизации",
-        "drm_valid_from": "Действительно с",
-        "drm_valid_to": "Действительно до",
-        "drm_step2": "Шаг 2: Авторизация режима GL (SteamTools)",
-        "drm_gl_hint": "Записать билет авторизации в каталог SteamTools",
-        "drm_gl_btn": "Авторизовать (GL/SteamTools)",
-        "drm_log": "Журнал",
-        "drm_nav": "D-Шифрование",
-        "drm_tip_select_cw": "Пожалуйста, сначала выберите CW файл",
-        "drm_tip_enter_code": "Пожалуйста, введите код авторизации",
-        "drm_tip_decrypt_first": "Пожалуйста, сначала расшифруйте CW файл",
-        "drm_tip_valid_appid": "Пожалуйста, введите действительный AppID",
-        "drm_missing_dep": "Отсутствует зависимость",
-        "drm_missing_dep_hint": "Пожалуйста, установите pycryptodome: pip install pycryptodome",
-        "drm_decrypt_failed": "Ошибка расшифровки",
-        "drm_download_failed": "Ошибка загрузки",
-        "drm_auth_success": "Авторизация успешна",
-        "drm_auth_failed": "Авторизация не удалась",
         "tip": "Совет",
         "recognition_success": "Успешное распознавание",
         "game_not_found": "Игра не найдена",
@@ -813,6 +766,11 @@ TEXTS = {
         "st_settings_hint": "Управление режимом версий файлов SteamTools",
         "st_fixed_enable": "Включить режим фиксированной версии SteamTools",
         "st_fixed_tooltip": "Новые файлы SteamTools будут использовать режим фиксированной версии по умолчанию",
+        "st_fixed_manifest_mode": "Исправление манифеста фикс. версии",
+        "st_fixed_manifest_mode_hint": "Автоматически исправлять манифест при переключении на фиксированную версию",
+        "st_fixed_manifest_always": "Всегда",
+        "st_fixed_manifest_never": "Никогда",
+        "st_fixed_manifest_ask": "Спрашивать",
         "dlc_timeout": "Тайм-аут сети DLC",
         "dlc_timeout_hint": "Тайм-аут получения списка DLC, увеличьте при медленной сети (секунды)",
         "name_not_found": "Имя не найдено",
@@ -844,6 +802,7 @@ TEXTS = {
         "add_options": "Hinzufügen-Optionen",
         "add_all_dlc": "Alle DLCs hinzufügen",
         "patch_depot_key": "Depot-Schlüssel patchen",
+        "patch_manifest": "Manifest patchen",
         "manifest_source": "Manifest-Quelle:",
         "add_game": "Spiel hinzufügen",
         "steam_path": "Steam-Pfad",
@@ -860,6 +819,8 @@ TEXTS = {
         "thanks": "Danksagungen",
         "restart_required": "Neustart erforderlich",
         "language_changed": "Sprache geändert zu {0}\n\nJetzt Anwendung neu starten um Änderungen anzuwenden?",
+        "theme_mode_changed": "Themen-Modus geändert zu {0}\n\nJetzt Anwendung neu starten um Änderungen anzuwenden?",
+        "theme_color_changed": "Themen-Farbe geändert zu {0}\n\nJetzt Anwendung neu starten um Änderungen anzuwenden?",
         "restart_steam_confirm": "Steam neu starten",
         "restart_steam_message": "Sind Sie sicher, dass Sie Steam neu starten möchten?\n\nDies wird das aktuelle Steam schließen und neu starten.",
         "total_games": "Gesamt: {0} Spiele | SteamTools: {1} | GreenLuma: {2}",
@@ -928,42 +889,6 @@ TEXTS = {
         "check_update_failed": "Prüfung fehlgeschlagen",
         "restart_steam_title": "Steam neu starten",
         "restart_steam_confirm_message": "Sind Sie sicher, dass Sie Steam neu starten möchten?\n\nDies wird das aktuelle Steam schließen und neu starten.",
-        "drm_page_title": "D-Verschlüsselung Autorisierung",
-        "drm_step1": "Schritt 1: Autorisierungsdatei erhalten",
-        "drm_cw_file": "CW-Datei",
-        "drm_cw_file_hint": "Lokale .cw-Datei auswählen und entschlüsseln",
-        "drm_cw_placeholder": "CW-Autorisierungsdatei auswählen",
-        "drm_browse": "Durchsuchen",
-        "drm_decrypt": "Entschlüsseln",
-        "drm_auth_code": "Autorisierungscode",
-        "drm_auth_code_hint": "CW-Datei online über Autorisierungscode herunterladen",
-        "drm_auth_code_placeholder": "Autorisierungscode eingeben",
-        "drm_download_decrypt": "Herunterladen & Entschlüsseln",
-        "drm_online_auth": "Online-Autorisierung erhalten",
-        "drm_online_auth_hint": "Externe Autorisierungs-Websites besuchen",
-        "drm_extract_title": "CW-Datei erhalten (Lokale Extraktion)",
-        "drm_extract_hint": "Benötigt Steam-Anmeldung und Spielbesitz",
-        "drm_extract_placeholder": "Spiel-AppID eingeben (muss das Spiel besitzen)",
-        "drm_gen_authcode": "Autorisierungscode generieren",
-        "drm_extract_cw": "CW lokal extrahieren",
-        "drm_info_title": "Autorisierungsinformationen",
-        "drm_valid_from": "Gültig ab",
-        "drm_valid_to": "Gültig bis",
-        "drm_step2": "Schritt 2: GL-Modus-Autorisierung (SteamTools)",
-        "drm_gl_hint": "Autorisierungsticket in SteamTools-Verzeichnis schreiben",
-        "drm_gl_btn": "Autorisieren (GL/SteamTools)",
-        "drm_log": "Protokoll",
-        "drm_nav": "D-Verschlüsselung",
-        "drm_tip_select_cw": "Bitte wählen Sie zuerst eine CW-Datei aus",
-        "drm_tip_enter_code": "Bitte geben Sie einen Autorisierungscode ein",
-        "drm_tip_decrypt_first": "Bitte entschlüsseln Sie zuerst die CW-Datei",
-        "drm_tip_valid_appid": "Bitte geben Sie eine gültige AppID ein",
-        "drm_missing_dep": "Abhängigkeit fehlt",
-        "drm_missing_dep_hint": "Bitte installieren Sie pycryptodome: pip install pycryptodome",
-        "drm_decrypt_failed": "Entschlüsselung fehlgeschlagen",
-        "drm_download_failed": "Download fehlgeschlagen",
-        "drm_auth_success": "Autorisierung erfolgreich",
-        "drm_auth_failed": "Autorisierung fehlgeschlagen",
         "tip": "Tipp",
         "recognition_success": "Erkennung erfolgreich",
         "game_not_found": "Spiel nicht gefunden",
@@ -1006,6 +931,11 @@ TEXTS = {
         "st_settings_hint": "Versionsverwaltungsmodus für SteamTools-Dateien steuern",
         "st_fixed_enable": "SteamTools Feste Version aktivieren",
         "st_fixed_tooltip": "Neue SteamTools-Dateien verwenden standardmäßig den festen Versionsmodus",
+        "st_fixed_manifest_mode": "Manifest-Reparatur feste Version",
+        "st_fixed_manifest_mode_hint": "Manifest automatisch reparieren beim Wechsel zur festen Version",
+        "st_fixed_manifest_always": "Immer",
+        "st_fixed_manifest_never": "Nie",
+        "st_fixed_manifest_ask": "Fragen",
         "dlc_timeout": "DLC-Netzwerk-Timeout",
         "dlc_timeout_hint": "Timeout für DLC-Liste, bei langsamen Netzwerk erhöhen (Sekunden)",
         "name_not_found": "Name nicht gefunden",
@@ -1036,42 +966,7 @@ TEXTS = {
         "search_button": "検索",
         "add_options": "追加オプション",
         "add_all_dlc": "すべてのDLCを追加",
-        "drm_page_title": "D暗号化認証ツール",
-        "drm_step1": "ステップ1: 認証ファイルを取得",
-        "drm_cw_file": "CWファイル",
-        "drm_cw_file_hint": "ローカルの.cwファイルを選択して復号",
-        "drm_cw_placeholder": "CW認証ファイルを選択",
-        "drm_browse": "参照",
-        "drm_decrypt": "復号",
-        "drm_auth_code": "認証コード",
-        "drm_auth_code_hint": "認証コードでオンラインからCWファイルをダウンロード",
-        "drm_auth_code_placeholder": "認証コードを入力",
-        "drm_download_decrypt": "ダウンロード＆復号",
-        "drm_online_auth": "オンライン認証を取得",
-        "drm_online_auth_hint": "外部認証サイトを訪問",
-        "drm_extract_title": "CWファイルを取得（ローカル抽出）",
-        "drm_extract_hint": "Steamログインとゲーム所有権が必要",
-        "drm_extract_placeholder": "ゲームAppIDを入力（ゲームを所有している必要があります）",
-        "drm_gen_authcode": "認証コードを生成",
-        "drm_extract_cw": "CWをローカル抽出",
-        "drm_info_title": "認証情報",
-        "drm_valid_from": "有効開始日",
-        "drm_valid_to": "有効期限",
-        "drm_step2": "ステップ2: GLモード認証（SteamTools）",
-        "drm_gl_hint": "認証チケットをSteamToolsディレクトリに書き込み",
-        "drm_gl_btn": "認証（GL/SteamTools）",
-        "drm_log": "ログ",
-        "drm_nav": "D暗号化",
-        "drm_tip_select_cw": "まずCWファイルを選択してください",
-        "drm_tip_enter_code": "認証コードを入力してください",
-        "drm_tip_decrypt_first": "まずCWファイルを復号してください",
-        "drm_tip_valid_appid": "有効なAppIDを入力してください",
-        "drm_missing_dep": "依存関係がありません",
-        "drm_missing_dep_hint": "pycryptodomeをインストールしてください: pip install pycryptodome",
-        "drm_decrypt_failed": "復号失敗",
-        "drm_download_failed": "ダウンロード失敗",
-        "drm_auth_success": "認証成功",
-        "drm_auth_failed": "認証失敗",
+        "patch_manifest": "マニフェストをパッチ",
         "patch_depot_key": "デポットキーをパッチ",
         "manifest_source": "マニフェストソース:",
         "add_game": "ゲームを追加",
@@ -1089,6 +984,8 @@ TEXTS = {
         "thanks": "謝辞",
         "restart_required": "再起動が必要",
         "language_changed": "言語が {0} に変更されました\n\n変更を適用するために今すぐアプリケーションを再起動しますか？",
+        "theme_mode_changed": "テーマモードが {0} に変更されました\n\n変更を適用するために今すぐアプリケーションを再起動しますか？",
+        "theme_color_changed": "テーマカラーが {0} に変更されました\n\n変更を適用するために今すぐアプリケーションを再起動しますか？",
         "restart_steam_confirm": "Steamを再起動",
         "restart_steam_message": "Steamを再起動してもよろしいですか？\n\n現在実行中のSteamを終了して再起動します。",
         "total_games": "合計: {0} ゲーム | SteamTools: {1} | GreenLuma: {2}",
@@ -1199,6 +1096,11 @@ TEXTS = {
         "st_settings_hint": "SteamToolsファイルのバージョン管理モードを制御",
         "st_fixed_enable": "SteamTools固定バージョンモードを有効にする",
         "st_fixed_tooltip": "新しいSteamToolsファイルはデフォルトで固定バージョンモードを使用します",
+        "st_fixed_manifest_mode": "固定バージョンマニフェスト修復",
+        "st_fixed_manifest_mode_hint": "ホームページで固定バージョンに切り替える際にマニフェストを自動修復",
+        "st_fixed_manifest_always": "常に",
+        "st_fixed_manifest_never": "从不",
+        "st_fixed_manifest_ask": "確認",
         "dlc_timeout": "DLC ネットワークタイムアウト",
         "dlc_timeout_hint": "DLCリスト取得のタイムアウト、ネットワークが遅い場合は増やしてください（秒）",
         "name_not_found": "名前が見つかりません",
@@ -1230,6 +1132,7 @@ TEXTS = {
         "add_options": "入库選項",
         "add_all_dlc": "加入所有 DLC",
         "patch_depot_key": "修補 Depot Key",
+        "patch_manifest": "修補 Manifest",
         "manifest_source": "清單來源:",
         "view_mode": "檢視模式",
         "sort_mode": "排序",
@@ -1253,6 +1156,8 @@ TEXTS = {
         "thanks": "感謝",
         "restart_required": "需要重新啟動",
         "language_changed": "語言已變更為 {0}\n\n是否立即重新啟動應用以套用變更？",
+        "theme_mode_changed": "主題模式已變更為 {0}\n\n是否立即重新啟動應用以套用變更？",
+        "theme_color_changed": "主題顏色已變更為 {0}\n\n是否立即重新啟動應用以套用變更？",
         "restart_steam_confirm": "重新啟動 Steam",
         "restart_steam_message": "確定要重新啟動 Steam 嗎？\n\n這將關閉目前執行中的 Steam 並重新啟動。",
         "total_games": "共 {0} 個遊戲 | SteamTools: {1} | GreenLuma: {2}",
@@ -1321,42 +1226,6 @@ TEXTS = {
         "check_update_failed": "檢查更新失敗",
         "restart_steam_title": "重新啟動 Steam",
         "restart_steam_confirm_message": "確定要重新啟動 Steam 嗎？\n\n這將關閉目前執行中的 Steam 並重新啟動。",
-        "drm_page_title": "D加密授權器",
-        "drm_step1": "步驟 1：取得授權檔案",
-        "drm_cw_file": "CW 檔案",
-        "drm_cw_file_hint": "選擇本機 .cw 授權檔案並解密",
-        "drm_cw_placeholder": "選擇 .cw 授權檔案",
-        "drm_browse": "瀏覽",
-        "drm_decrypt": "解密",
-        "drm_auth_code": "授權碼",
-        "drm_auth_code_hint": "透過授權碼線上取得 CW 檔案",
-        "drm_auth_code_placeholder": "輸入授權碼",
-        "drm_download_decrypt": "下載並解密",
-        "drm_online_auth": "線上取得授權",
-        "drm_online_auth_hint": "造訪外部授權網站",
-        "drm_extract_title": "取得 CW 檔案（本機提取）",
-        "drm_extract_hint": "需要已登入 Steam 且擁有該遊戲",
-        "drm_extract_placeholder": "輸入遊戲 AppID（目前帳號必須擁有該遊戲）",
-        "drm_gen_authcode": "產生授權碼",
-        "drm_extract_cw": "本機提取 CW",
-        "drm_info_title": "授權資訊",
-        "drm_valid_from": "生效時間",
-        "drm_valid_to": "失效時間",
-        "drm_step2": "步驟 2：GL 模式授權（SteamTools）",
-        "drm_gl_hint": "將授權 ticket 寫入 SteamTools 目錄",
-        "drm_gl_btn": "開始授權 (GL/SteamTools)",
-        "drm_log": "紀錄",
-        "drm_nav": "D加密",
-        "drm_tip_select_cw": "請先選擇 CW 檔案",
-        "drm_tip_enter_code": "請輸入授權碼",
-        "drm_tip_decrypt_first": "請先解密 CW 檔案",
-        "drm_tip_valid_appid": "請輸入有效的 AppID",
-        "drm_missing_dep": "缺少依賴",
-        "drm_missing_dep_hint": "請安裝 pycryptodome: pip install pycryptodome",
-        "drm_decrypt_failed": "解密失敗",
-        "drm_download_failed": "下載失敗",
-        "drm_auth_success": "授權成功",
-        "drm_auth_failed": "授權失敗",
         
         # 缺失的翻譯鍵
         "tip": "提示",
@@ -1401,6 +1270,11 @@ TEXTS = {
         "st_settings_hint": "控制SteamTools檔案的版本管理模式",
         "st_fixed_enable": "啟用 SteamTools 固定版本模式",
         "st_fixed_tooltip": "新增的SteamTools檔案預設使用固定版本模式",
+        "st_fixed_manifest_mode": "固定版本Manifest修復",
+        "st_fixed_manifest_mode_hint": "主頁切換至固定版本時是否自動修復manifest",
+        "st_fixed_manifest_always": "始終",
+        "st_fixed_manifest_never": "從不",
+        "st_fixed_manifest_ask": "詢問",
         "dlc_timeout": "DLC 聯網超時時間",
         "dlc_timeout_hint": "獲取DLC列表超時時間，網路較差時可適當調大（秒）",
         "name_not_found": "名稱未找到",
@@ -1576,7 +1450,10 @@ class GameCard(CardWidget):
         self.coverLabel = QLabel(self)
         self.coverLabel.setFixedSize(120, 56)
         self.coverLabel.setScaledContents(True)
+        # 根据主题模式动态设置背景颜色
         self.coverLabel.setStyleSheet("border-radius: 4px; background: #2a2a2a;")
+        # 监听主题变化
+        self.theme_changed()
         
         # 游戏标题
         # 如果游戏名称为空或显示为"名称未找到"等，显示AppID
@@ -1638,6 +1515,17 @@ class GameCard(CardWidget):
         
         # 加载封面（最后执行）
         self.load_cover()
+    
+    def theme_changed(self):
+        """主题变化时更新样式"""
+        if isDarkTheme():
+            self.coverLabel.setStyleSheet("border-radius: 4px; background: #2a2a2a;")
+        else:
+            self.coverLabel.setStyleSheet("border-radius: 4px; background: #f0f0f0;")
+        
+        # 强制刷新卡片
+        self.update()
+        self.repaint()
     
     def load_cover(self):
         """加载游戏封面"""
@@ -1730,7 +1618,10 @@ class GameCardGrid(CardWidget):
         self.coverLabel = QLabel(self)
         self.coverLabel.setFixedSize(180, 84)
         self.coverLabel.setScaledContents(True)
+        # 根据主题模式动态设置背景颜色
         self.coverLabel.setStyleSheet("border-radius: 4px; background: #2a2a2a;")
+        # 监听主题变化
+        self.theme_changed()
         
         # 游戏标题
         display_name = game_name
@@ -1796,6 +1687,13 @@ class GameCardGrid(CardWidget):
         
         # 加载封面（最后执行）
         self.load_cover()
+    
+    def theme_changed(self):
+        """主题变化时更新样式"""
+        if isDarkTheme():
+            self.coverLabel.setStyleSheet("border-radius: 4px; background: #2a2a2a;")
+        else:
+            self.coverLabel.setStyleSheet("border-radius: 4px; background: #f0f0f0;")
     
     def load_cover(self):
         """加载游戏封面"""
@@ -2185,6 +2083,7 @@ class HomePage(ScrollArea):
         
         # 视图模式选择
         self.view_mode_label = QLabel(tr("view_mode") + ":", self)
+        self.view_mode_label.setStyleSheet("color: #000000;" if not isDarkTheme() else "color: #ffffff;")
         self.view_mode_combo = ComboBox(self)
         self.view_mode_combo.addItems([tr("view_list"), tr("view_grid")])
         self.view_mode_combo.setCurrentIndex(0)
@@ -2196,6 +2095,7 @@ class HomePage(ScrollArea):
         
         # 排序选择
         self.sort_label = QLabel(tr("sort_mode") + ":", self)
+        self.sort_label.setStyleSheet("color: #000000;" if not isDarkTheme() else "color: #ffffff;")
         self.sort_combo = ComboBox(self)
         self.sort_combo.addItems([tr("sort_default"), tr("sort_az"), tr("sort_za")])
         self.sort_combo.setCurrentIndex(0)
@@ -2387,7 +2287,12 @@ class HomePage(ScrollArea):
             self.card_layout.addWidget(empty_label)
             self.game_cards.append(empty_label)
     
-
+    def notify_theme_changed(self):
+        """通知所有游戏卡片主题已变化"""
+        # 更新所有游戏卡片的封面背景颜色
+        for card in self.game_cards:
+            if hasattr(card, 'theme_changed'):
+                card.theme_changed()
     
     def sort_games(self, games_data):
         """根据排序选项对游戏进行排序"""
@@ -2605,6 +2510,33 @@ class HomePage(ScrollArea):
     
     def _check_and_complete_manifest_after_toggle(self, appid):
         """切换固定版本后，检查并补全清单文件"""
+        # 读取配置，判断修复模式
+        config_path = Path.cwd() / 'config.json'
+        manifest_mode = "ask"  # 默认询问
+        try:
+            if config_path.exists():
+                import json
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                manifest_mode = config.get("ST_Fixed_Manifest_Mode", "ask")
+        except Exception:
+            pass
+        
+        # 如果设置为从不修复，直接返回
+        if manifest_mode == "never":
+            return
+        
+        # 如果设置为询问，显示确认对话框
+        if manifest_mode == "ask":
+            dialog = MessageBox(
+                "修复Manifest",
+                f"AppID {appid} 切换到固定版本后可能需要修复manifest文件。\n\n是否现在修复？",
+                self
+            )
+            if not dialog.exec():
+                return  # 用户取消
+        
+        # 执行修复（始终模式或询问模式且用户确认）
         async def _check_and_complete():
             async with CaiBackend() as backend:
                 await backend.initialize()
@@ -2854,7 +2786,10 @@ class SearchResultCard(CardWidget):
         self.coverLabel = QLabel(self)
         self.coverLabel.setFixedSize(120, 56)
         self.coverLabel.setScaledContents(True)
-        self.coverLabel.setStyleSheet("border-radius: 4px; background: #2a2a2a;")
+        # 根据主题模式动态设置背景颜色 - 暗色主题使用更深的颜色
+        self.coverLabel.setStyleSheet("border-radius: 4px; background: #1a1a1a;")
+        # 监听主题变化
+        self.theme_changed()
         
         # 游戏标题
         self.titleLabel = BodyLabel(game_name, self)
@@ -2898,6 +2833,13 @@ class SearchResultCard(CardWidget):
         
         # 加载封面
         self.load_cover()
+    
+    def theme_changed(self):
+        """主题变化时更新样式"""
+        if isDarkTheme():
+            self.coverLabel.setStyleSheet("border-radius: 4px; background: #1a1a1a;")
+        else:
+            self.coverLabel.setStyleSheet("border-radius: 4px; background: #f0f0f0;")
     
     def load_cover(self):
         """加载游戏封面"""
@@ -2952,7 +2894,10 @@ class SearchResultCardGrid(CardWidget):
         self.coverLabel = QLabel(self)
         self.coverLabel.setFixedSize(180, 84)
         self.coverLabel.setScaledContents(True)
-        self.coverLabel.setStyleSheet("border-radius: 4px; background: #2a2a2a;")
+        # 根据主题模式动态设置背景颜色 - 暗色主题使用更深的颜色
+        self.coverLabel.setStyleSheet("border-radius: 4px; background: #1a1a1a;")
+        # 监听主题变化
+        self.theme_changed()
         
         # 游戏标题
         self.titleLabel = BodyLabel(game_name, self)
@@ -3002,6 +2947,13 @@ class SearchResultCardGrid(CardWidget):
         
         # 加载封面
         self.load_cover()
+    
+    def theme_changed(self):
+        """主题变化时更新样式"""
+        if isDarkTheme():
+            self.coverLabel.setStyleSheet("border-radius: 4px; background: #1a1a1a;")
+        else:
+            self.coverLabel.setStyleSheet("border-radius: 4px; background: #f0f0f0;")
     
     def load_cover(self):
         """加载游戏封面"""
@@ -3070,6 +3022,7 @@ class SearchPage(ScrollArea):
         
         # 视图模式选择
         self.view_mode_label = QLabel(tr("view_mode") + ":", self)
+        self.view_mode_label.setStyleSheet("color: #000000;" if not isDarkTheme() else "color: #ffffff;")
         self.view_mode_combo = ComboBox(self)
         self.view_mode_combo.addItems([tr("view_list"), tr("view_grid")])
         self.view_mode_combo.setCurrentIndex(0)
@@ -3081,6 +3034,7 @@ class SearchPage(ScrollArea):
         
         # 排序选择
         self.sort_label = QLabel(tr("sort_mode") + ":", self)
+        self.sort_label.setStyleSheet("color: #000000;" if not isDarkTheme() else "color: #ffffff;")
         self.sort_combo = ComboBox(self)
         self.sort_combo.addItems([tr("sort_default"), tr("sort_az"), tr("sort_za")])
         self.sort_combo.setCurrentIndex(0)
@@ -3096,6 +3050,7 @@ class SearchPage(ScrollArea):
         
         # 清单源选择
         self.manifest_source_label = QLabel(tr("manifest_source"), self)
+        self.manifest_source_label.setStyleSheet("color: #000000;" if not isDarkTheme() else "color: #ffffff;")
         self.manifest_source_combo = ComboBox(self)
         self.manifest_source_combo.addItems([
             "自动选择",
@@ -3126,6 +3081,12 @@ class SearchPage(ScrollArea):
         self.patch_key_check.setChecked(False)
         self.patch_key_check.stateChanged.connect(self.on_patch_key_changed)
         options_layout.addWidget(self.patch_key_check)
+        
+        # 修补Manifest选项
+        self.patch_manifest_check = CheckBox(tr("patch_manifest"), self)
+        self.patch_manifest_check.setChecked(False)
+        self.patch_manifest_check.stateChanged.connect(self.on_patch_manifest_changed)
+        options_layout.addWidget(self.patch_manifest_check)
         
         options_layout.addStretch(1)
         layout.addLayout(options_layout)
@@ -3180,6 +3141,7 @@ class SearchPage(ScrollArea):
         # 加载DLC和修补选项状态
         self.load_add_dlc_preference()
         self.load_patch_key_preference()
+        self.load_patch_manifest_preference()
     
     def on_add_dlc_changed(self):
         """DLC选项改变时保存状态"""
@@ -3271,6 +3233,51 @@ class SearchPage(ScrollArea):
         except Exception as e:
             print(f"加载修补Key选项失败: {e}")
     
+    def on_patch_manifest_changed(self):
+        """修补Manifest选项改变时保存状态"""
+        self.save_patch_manifest_preference()
+    
+    def save_patch_manifest_preference(self):
+        """保存修补Manifest选项状态"""
+        try:
+            config_path = Path.cwd() / 'config.json'
+            import json
+            
+            # 读取现有配置
+            if config_path.exists():
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+            else:
+                from backend import DEFAULT_CONFIG
+                config = DEFAULT_CONFIG.copy()
+            
+            # 保存修补Manifest选项状态
+            config["patch_manifest_default"] = self.patch_manifest_check.isChecked()
+            
+            # 保存配置
+            with open(config_path, 'w', encoding='utf-8') as f:
+                json.dump(config, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"保存修补Manifest选项失败: {e}")
+    
+    def load_patch_manifest_preference(self):
+        """加载修补Manifest选项状态"""
+        try:
+            config_path = Path.cwd() / 'config.json'
+            import json
+            
+            # 读取配置
+            if config_path.exists():
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                
+                # 获取保存的修补Manifest选项状态
+                patch_manifest_default = config.get("patch_manifest_default", False)
+                self.patch_manifest_check.setChecked(patch_manifest_default)
+                
+        except Exception as e:
+            print(f"加载修补Manifest选项失败: {e}")
+    
     def __del__(self):
         """析构函数，确保清理所有worker"""
         self.cleanup_workers()
@@ -3312,10 +3319,10 @@ class SearchPage(ScrollArea):
                 3: "sac-other",
                 4: "cysaw",
                 5: "walftech",
-                7: "sudama",
-                8: "buqiuren",
-                9: "MHub",
-                10: "github_auiowu",
+                6: "sudama",
+                7: "buqiuren",
+                8: "MHub",
+                9: "github_auiowu",
             }
             config["default_manifest_source"] = source_mapping.get(self.manifest_source_combo.currentIndex(), "auto")
             
@@ -3366,10 +3373,10 @@ class SearchPage(ScrollArea):
                     "sac-other": 3,
                     "cysaw": 4,
                     "walftech": 5,
-                    "sudama": 7,
-                    "buqiuren": 8,
-                    "MHub": 9,
-                    "github_auiowu": 10,
+                    "sudama": 6,
+                    "buqiuren": 7,
+                    "MHub": 8,
+                    "github_auiowu": 9,
                 }
                 
                 index = source_mapping.get(saved_source, 0)
@@ -3635,41 +3642,13 @@ class SearchPage(ScrollArea):
         for card in self.result_cards:
             card.deleteLater()
         self.result_cards.clear()
-        
-        # 搜索中提示
-        InfoBar.info(
-            title=tr("tip"),
-            content=tr("loading"),
-            parent=self,
-            position=InfoBarPosition.TOP,
-            duration=1500
-        )
-        
-        async def _search():
-            async with CaiBackend() as backend:
-                await backend.initialize()
-                appid = backend.extract_app_id(query)
-                if appid:
-                    return {'type': 'appid', 'appid': appid}
-                else:
-                    results = await backend.find_appid_by_name(query, get_steam_lang(current_language))
-                    return {'type': 'search', 'results': results}
-        
-        if hasattr(self, 'search_worker') and self.search_worker:
-            try:
-                if self.search_worker.isRunning():
-                    self.search_worker.cancel()
-                    self.search_worker.wait(5000)
-            except RuntimeError:
-                pass
-            self.search_worker = None
-        
-        worker = AsyncWorker(_search())
-        self.search_worker = worker
-        worker.result_ready.connect(self.on_search_complete)
-        worker.error.connect(self.on_search_error)
-        worker.finished.connect(worker.deleteLater)
-        worker.start()
+    
+    def notify_theme_changed(self):
+        """通知所有搜索结果卡片主题已变化"""
+        # 更新所有搜索结果卡片的封面背景颜色
+        for card in self.result_cards:
+            if hasattr(card, 'theme_changed'):
+                card.theme_changed()
     
 
     
@@ -3874,6 +3853,7 @@ class SearchPage(ScrollArea):
         # 获取选项
         add_all_dlc = self.add_dlc_check.isChecked()
         patch_depot_key = self.patch_key_check.isChecked()
+        patch_manifest = self.patch_manifest_check.isChecked()
         
         # 获取用户选择的清单源（用索引避免文本翻译不一致问题）
         index_to_source = {
@@ -3883,10 +3863,10 @@ class SearchPage(ScrollArea):
             3: "sac-other",
             4: "cysaw",
             5: "walftech",
-            7: "sudama",
-            8: "buqiuren",
-            9: "MHub",
-            10: "github_auiowu",
+            6: "sudama",
+            7: "buqiuren",
+            8: "MHub",
+            9: "github_auiowu",
         }
         tool_type = index_to_source.get(self.manifest_source_combo.currentIndex(), "auto")
         
@@ -3933,10 +3913,14 @@ class SearchPage(ScrollArea):
                                 use_st_auto_update, add_all_dlc, patch_depot_key
                             )
                             if ok:
-                                backend.log.info(f"[自动选择] 源 {src} 成功，开始补全清单文件...")
-                                # 主入库成功后，补全清单文件
-                                post_result = await backend.complete_manifest_files(str(appid))
-                                return bool(post_result.get("success", True))
+                                # 主入库成功后，根据选项决定是否补全清单文件
+                                if patch_manifest:
+                                    backend.log.info(f"[自动选择] 源 {src} 成功，开始补全清单文件...")
+                                    post_result = await backend.complete_manifest_files(str(appid))
+                                    return bool(post_result.get("success", True))
+                                else:
+                                    backend.log.info(f"[自动选择] 源 {src} 成功，跳过补全清单文件（未勾选修补Manifest）")
+                                    return True
                         except Exception as e:
                             backend.log.warning(f"[自动选择] 源 {src} 失败: {e}")
                     return False
@@ -3958,11 +3942,15 @@ class SearchPage(ScrollArea):
                         use_st_auto_update, add_all_dlc, patch_depot_key
                     )
                 
-                # 主入库成功后，补全清单文件
+                # 主入库成功后，根据选项决定是否补全清单文件
                 if success:
-                    backend.log.info(f"主入库成功，开始补全清单文件...")
-                    post_result = await backend.complete_manifest_files(str(appid))
-                    return bool(post_result.get("success", True))
+                    if patch_manifest:
+                        backend.log.info(f"主入库成功，开始补全清单文件...")
+                        post_result = await backend.complete_manifest_files(str(appid))
+                        return bool(post_result.get("success", True))
+                    else:
+                        backend.log.info(f"主入库成功，跳过补全清单文件（未勾选修补Manifest）")
+                        return True
                 
                 return success
         
@@ -4096,7 +4084,22 @@ class SettinsCard(GroupHeaderCardWidget):
         # Steam路径设置
         self.steam_path_edit = LineEdit()
         self.steam_path_edit.setPlaceholderText(tr("auto_detect_placeholder"))
-        self.steam_path_edit.setFixedWidth(320)
+        self.steam_path_edit.setFixedWidth(280)
+        
+        # 文件夹选择按钮
+        self.steam_path_button = TransparentToolButton(FluentIcon.FOLDER, self)
+        self.steam_path_button.setFixedSize(32, 32)
+        self.steam_path_button.setToolTip("选择Steam安装路径")
+        self.steam_path_button.clicked.connect(self.select_steam_path)
+        
+        # 创建水平布局容器
+        steam_path_layout = QHBoxLayout()
+        steam_path_layout.addWidget(self.steam_path_edit)
+        steam_path_layout.addWidget(self.steam_path_button)
+        steam_path_layout.setContentsMargins(0, 0, 0, 0)
+        
+        steam_path_widget = QWidget()
+        steam_path_widget.setLayout(steam_path_layout)
         
         # GitHub Token设置
         self.token_edit = LineEdit()
@@ -4125,9 +4128,39 @@ class SettinsCard(GroupHeaderCardWidget):
         manifest_api_widget.setLayout(manifest_api_layout)
 
         # 添加组件到分组中
-        self.addGroup(FluentIcon.FOLDER, tr("steam_path"), tr("steam_path_hint"), self.steam_path_edit)
+        self.addGroup(FluentIcon.FOLDER, tr("steam_path"), tr("steam_path_hint"), steam_path_widget)
         self.addGroup(FluentIcon.GITHUB, tr("github_token"), tr("github_token_hint"), self.token_edit)
         self.addGroup(FluentIcon.CERTIFICATE, "Manifest API Key", "用于方法2的API拉取清单", manifest_api_widget)
+    
+    def select_steam_path(self):
+        """选择Steam安装路径"""
+        from PyQt6.QtWidgets import QFileDialog
+        
+        # 获取当前路径作为初始目录
+        current_path = self.steam_path_edit.text().strip()
+        if current_path:
+            initial_dir = current_path
+        else:
+            # 尝试自动检测Steam路径
+            try:
+                import winreg
+                key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r'Software\\Valve\\Steam')
+                steam_path, _ = winreg.QueryValueEx(key, 'SteamPath')
+                winreg.CloseKey(key)
+                initial_dir = steam_path
+            except:
+                initial_dir = ""
+        
+        # 打开文件夹选择对话框
+        folder_path = QFileDialog.getExistingDirectory(
+            self, 
+            "选择Steam安装路径",
+            initial_dir,
+            QFileDialog.Option.ShowDirsOnly | QFileDialog.Option.DontResolveSymlinks
+        )
+        
+        if folder_path:
+            self.steam_path_edit.setText(folder_path)
 
 
 # ===== 联机游戏页面 =====
@@ -4266,10 +4299,17 @@ class LauncherPage(ScrollArea):
         self.log_view = TextEdit(log_card)
         self.log_view.setReadOnly(True)
         self.log_view.setFixedHeight(220)
-        self.log_view.setStyleSheet(
-            "TextEdit { background: rgba(0,0,0,0.15); border-radius: 6px; "
-            "font-size: 12px; padding: 8px; }"
-        )
+        # 根据主题模式动态设置背景颜色
+        if isDarkTheme():
+            self.log_view.setStyleSheet(
+                "TextEdit { background: rgba(0,0,0,0.15); border-radius: 6px; "
+                "font-size: 12px; padding: 8px; }"
+            )
+        else:
+            self.log_view.setStyleSheet(
+                "TextEdit { background: rgba(0,0,0,0.05); border-radius: 6px; "
+                "font-size: 12px; padding: 8px; }"
+            )
         log_layout.addWidget(self.log_view)
         self.mainLayout.addWidget(log_card)
         self.mainLayout.addStretch(1)
@@ -4296,13 +4336,36 @@ class LauncherPage(ScrollArea):
         import time as _time
         ts = _time.strftime("%H:%M:%S")
         self._log_lines.append(f"[{ts}] {msg}")
-        self.log_view.append(f"<span style='color:#888'>[{ts}]</span> {msg}")
+        # 根据主题模式设置文字颜色
+        if isDarkTheme():
+            self.log_view.append(f"<span style='color:#888'>[{ts}]</span> <span style='color:#fff'>{msg}</span>")
+        else:
+            self.log_view.append(f"<span style='color:#666'>[{ts}]</span> <span style='color:#000'>{msg}</span>")
         sb = self.log_view.verticalScrollBar()
         sb.setValue(sb.maximum())
 
     def _clear_log(self):
         self._log_lines.clear()
         self.log_view.clear()
+    
+    def notify_theme_changed(self):
+        """通知日志显示组件主题已变化"""
+        # 更新日志显示组件的样式
+        if hasattr(self, 'log_view') and self.log_view:
+            if isDarkTheme():
+                self.log_view.setStyleSheet(
+                    "TextEdit { background: rgba(0,0,0,0.15); border-radius: 6px; "
+                    "font-size: 12px; padding: 8px; color: #ffffff; }"
+                )
+            else:
+                self.log_view.setStyleSheet(
+                    "TextEdit { background: rgba(0,0,0,0.05); border-radius: 6px; "
+                    "font-size: 12px; padding: 8px; color: #000000; }"
+                )
+            
+            # 强制刷新日志内容
+            self.log_view.update()
+            self.log_view.repaint()
 
     def _browse_exe(self):
         from PyQt6.QtWidgets import QFileDialog
@@ -4426,9 +4489,6 @@ class LauncherPage(ScrollArea):
             InfoBar.error(title=tr("launcher_error"), content=str(e), parent=self, position=InfoBarPosition.TOP)
 
 
-
-
-
 class SettingsPage(ScrollArea):
     """设置页面"""
     
@@ -4457,6 +4517,7 @@ class SettingsPage(ScrollArea):
         self.lang_combo = None
         self.effect_combo = None
         self.st_mode_combo = None
+        self.st_fixed_manifest_combo = None
         self.dlc_timeout_spinbox = None
         self.log_view = None
         self.default_page_combo = None
@@ -4482,14 +4543,26 @@ class SettingsPage(ScrollArea):
         if self.log_view is None:
             self._pending_logs.append((level, msg))
             return
-        color_map = {
-            "DEBUG": "#888888",
-            "INFO": "#cccccc",
-            "WARNING": "#f59e0b",
-            "ERROR": "#ef4444",
-            "CRITICAL": "#dc2626",
-        }
-        color = color_map.get(level, "#cccccc")
+        
+        # 根据主题模式设置颜色映射
+        if isDarkTheme():
+            color_map = {
+                "DEBUG": "#888888",
+                "INFO": "#cccccc",
+                "WARNING": "#f59e0b",
+                "ERROR": "#ef4444",
+                "CRITICAL": "#dc2626",
+            }
+        else:
+            color_map = {
+                "DEBUG": "#666666",
+                "INFO": "#333333",
+                "WARNING": "#d97706",
+                "ERROR": "#dc2626",
+                "CRITICAL": "#991b1b",
+            }
+        
+        color = color_map.get(level, "#cccccc" if isDarkTheme() else "#333333")
         self.log_view.append(f"<span style='color:{color}'>{msg}</span>")
         sb = self.log_view.verticalScrollBar()
         sb.setValue(sb.maximum())
@@ -4556,24 +4629,133 @@ class SettingsPage(ScrollArea):
         self.st_mode_combo.setCurrentIndex(1)  # 默认选中固定版本
         self.st_mode_combo.setFixedWidth(180)
         self.st_mode_combo.setToolTip(tr("st_fixed_tooltip"))
+        self.st_mode_combo.currentIndexChanged.connect(self.save_settings)
         app_config_card.addGroup(FluentIcon.SETTING, tr("st_settings"), tr("st_settings_hint"), self.st_mode_combo)
 
-        self.dlc_timeout_spinbox = SpinBox()
-        self.dlc_timeout_spinbox.setRange(5, 600)
-        self.dlc_timeout_spinbox.setValue(60)
-        self.dlc_timeout_spinbox.setSuffix(" s")
-        self.dlc_timeout_spinbox.setFixedWidth(120)
-        app_config_card.addGroup(FluentIcon.SPEED_HIGH, tr("dlc_timeout"), tr("dlc_timeout_hint"), self.dlc_timeout_spinbox)
+        # 固定版本manifest修复选项
+        self.st_fixed_manifest_combo = ComboBox()
+        self.st_fixed_manifest_combo.addItems([tr("st_fixed_manifest_always"), tr("st_fixed_manifest_never"), tr("st_fixed_manifest_ask")])
+        self.st_fixed_manifest_combo.setCurrentIndex(2)  # 默认选中询问
+        self.st_fixed_manifest_combo.setFixedWidth(180)
+        self.st_fixed_manifest_combo.setToolTip(tr("st_fixed_manifest_mode_hint"))
+        self.st_fixed_manifest_combo.currentIndexChanged.connect(self.save_settings)
+        app_config_card.addGroup(FluentIcon.DOCUMENT, tr("st_fixed_manifest_mode"), tr("st_fixed_manifest_mode_hint"), self.st_fixed_manifest_combo)
 
-        self.timeout_spinbox = SpinBox()
-        self.timeout_spinbox.setRange(10, 300)
-        self.timeout_spinbox.setValue(30)
-        self.timeout_spinbox.setSuffix(" s")
-        self.timeout_spinbox.setFixedWidth(120)
-        app_config_card.addGroup(FluentIcon.SPEED_HIGH, tr("download_timeout"), tr("download_timeout_hint"), self.timeout_spinbox)
+        # 创建 DLC 超时时间设置（左边输入框，右边滑块）
+        self.dlc_timeout_edit = LineEdit()
+        self.dlc_timeout_edit.setText("60")
+        self.dlc_timeout_edit.setPlaceholderText("5-600")
+        self.dlc_timeout_edit.setFixedWidth(80)  # 缩小宽度
+        # 设置输入验证器，限制只能输入数字
+        self.dlc_timeout_edit.setValidator(QIntValidator(5, 600, self.dlc_timeout_edit))
+        
+        # 创建单位标签
+        self.dlc_timeout_label = QLabel(" s")
+        
+        # 创建滑块控件
+        self.dlc_timeout_slider = Slider(Qt.Orientation.Horizontal)
+        self.dlc_timeout_slider.setRange(5, 600)
+        self.dlc_timeout_slider.setValue(60)
+        self.dlc_timeout_slider.setFixedWidth(200)
+        
+        # 创建水平布局容器
+        dlc_timeout_layout = QHBoxLayout()
+        dlc_timeout_layout.addWidget(self.dlc_timeout_edit)
+        dlc_timeout_layout.addWidget(self.dlc_timeout_label)
+        dlc_timeout_layout.addStretch(1)
+        dlc_timeout_layout.addWidget(self.dlc_timeout_slider)
+        dlc_timeout_layout.setContentsMargins(0, 0, 0, 0)
+        
+        dlc_timeout_widget = QWidget()
+        dlc_timeout_widget.setLayout(dlc_timeout_layout)
+        app_config_card.addGroup(FluentIcon.SPEED_HIGH, tr("dlc_timeout"), tr("dlc_timeout_hint"), dlc_timeout_widget)
+
+        # 创建下载超时时间设置（左边输入框，右边滑块）
+        self.timeout_edit = LineEdit()
+        self.timeout_edit.setText("30")
+        self.timeout_edit.setPlaceholderText("10-300")
+        self.timeout_edit.setFixedWidth(80)  # 缩小宽度
+        # 设置输入验证器，限制只能输入数字
+        self.timeout_edit.setValidator(QIntValidator(10, 300, self.timeout_edit))
+        
+        # 创建单位标签
+        self.timeout_label = QLabel(" s")
+        
+        # 创建滑块控件
+        self.timeout_slider = Slider(Qt.Orientation.Horizontal)
+        self.timeout_slider.setRange(10, 300)
+        self.timeout_slider.setValue(30)
+        self.timeout_slider.setFixedWidth(200)
+        
+        # 创建水平布局容器
+        timeout_layout = QHBoxLayout()
+        timeout_layout.addWidget(self.timeout_edit)
+        timeout_layout.addWidget(self.timeout_label)
+        timeout_layout.addStretch(1)
+        timeout_layout.addWidget(self.timeout_slider)
+        timeout_layout.setContentsMargins(0, 0, 0, 0)
+        
+        timeout_widget = QWidget()
+        timeout_widget.setLayout(timeout_layout)
+        app_config_card.addGroup(FluentIcon.SPEED_HIGH, tr("download_timeout"), tr("download_timeout_hint"), timeout_widget)
 
         layout.addWidget(app_config_card)
         QTimer.singleShot(0, self._build_phase3)
+        
+        # 设置同步逻辑
+        self._setup_sync_connections()
+
+    def _setup_sync_connections(self):
+        """设置输入框和滑块之间的同步连接"""
+        # DLC 超时时间同步
+        if self.dlc_timeout_edit and self.dlc_timeout_slider:
+            # 输入框文本改变时同步滑块
+            self.dlc_timeout_edit.textChanged.connect(self._on_dlc_timeout_edit_changed)
+            # 滑块值改变时同步输入框
+            self.dlc_timeout_slider.valueChanged.connect(self._on_dlc_timeout_slider_changed)
+            
+        # 下载超时时间同步
+        if self.timeout_edit and self.timeout_slider:
+            # 输入框文本改变时同步滑块
+            self.timeout_edit.textChanged.connect(self._on_timeout_edit_changed)
+            # 滑块值改变时同步输入框
+            self.timeout_slider.valueChanged.connect(self._on_timeout_slider_changed)
+    
+    def _on_dlc_timeout_edit_changed(self, text):
+        """DLC 超时时间输入框改变"""
+        if text and text.isdigit():
+            value = int(text)
+            # 确保值在有效范围内
+            if value < 5:
+                value = 5
+            elif value > 600:
+                value = 600
+            self.dlc_timeout_slider.setValue(value)
+            # 如果输入的值超出范围，自动修正输入框的值
+            if int(text) != value:
+                self.dlc_timeout_edit.setText(str(value))
+    
+    def _on_dlc_timeout_slider_changed(self, value):
+        """DLC 超时时间滑块改变"""
+        self.dlc_timeout_edit.setText(str(value))
+    
+    def _on_timeout_edit_changed(self, text):
+        """下载超时时间输入框改变"""
+        if text and text.isdigit():
+            value = int(text)
+            # 确保值在有效范围内
+            if value < 10:
+                value = 10
+            elif value > 300:
+                value = 300
+            self.timeout_slider.setValue(value)
+            # 如果输入的值超出范围，自动修正输入框的值
+            if int(text) != value:
+                self.timeout_edit.setText(str(value))
+    
+    def _on_timeout_slider_changed(self, value):
+        """下载超时时间滑块改变"""
+        self.timeout_edit.setText(str(value))
 
     def _build_phase3(self):
         """第3帧：外观卡片"""
@@ -4638,10 +4820,17 @@ class SettingsPage(ScrollArea):
         self.log_view = TextEdit(log_card)
         self.log_view.setReadOnly(True)
         self.log_view.setFixedHeight(200)
-        self.log_view.setStyleSheet(
-            "TextEdit { background: rgba(0,0,0,0.12); border-radius: 6px; "
-            "font-size: 12px; padding: 8px; }"
-        )
+        # 根据主题模式动态设置背景颜色
+        if isDarkTheme():
+            self.log_view.setStyleSheet(
+                "TextEdit { background: rgba(0,0,0,0.12); border-radius: 6px; "
+                "font-size: 12px; padding: 8px; }"
+            )
+        else:
+            self.log_view.setStyleSheet(
+                "TextEdit { background: rgba(0,0,0,0.05); border-radius: 6px; "
+                "font-size: 12px; padding: 8px; }"
+            )
         log_card_layout.addWidget(self.log_view)
         layout.addWidget(log_card)
 
@@ -4744,23 +4933,82 @@ class SettingsPage(ScrollArea):
     
     def on_theme_mode_changed(self, index):
         """主题模式切换"""
-        if index == 0:  # 浅色
-            setTheme(Theme.LIGHT)
-        elif index == 1:  # 深色
-            setTheme(Theme.DARK)
-        else:  # 跟随系统
-            setTheme(Theme.AUTO)
+        theme_map = {0: "light", 1: "dark", 2: "auto"}
+        theme_name_map = {0: tr("light_theme"), 1: tr("dark_theme"), 2: tr("follow_system")}
+        selected_theme = theme_map.get(index, "auto")
+        theme_name = theme_name_map.get(index, tr("follow_system"))
         
-        # 立即保存设置
-        self.save_theme_setting("theme_mode", ["light", "dark", "auto"][index])
+        # 显示重启提示
+        dialog = MessageBox(
+            tr("restart_required"),
+            tr("theme_mode_changed", theme_name),
+            self.window()
+        )
+        
+        if dialog.exec():
+            # 保存主题设置
+            self.save_theme_setting("theme_mode", selected_theme)
+            # 重启应用
+            import sys
+            from PyQt6.QtWidgets import QApplication
+            QApplication.quit()
+            import os
+            os.execl(sys.executable, sys.executable, *sys.argv)
+        else:
+            # 用户取消，恢复原来的选择
+            current_theme = self.load_theme_setting("theme_mode")
+            reverse_map = {"light": 0, "dark": 1, "auto": 2}
+            self.theme_combo.setCurrentIndex(reverse_map.get(current_theme, 2))
     
     def on_theme_color_changed(self, index):
         """主题色切换"""
         colors = ["#0078d4", "#9b4dca", "#10893e", "#ff8c00", "#e81123", "#e3008c"]
+        color_names = [tr("default_blue"), tr("purple"), tr("green"), tr("orange"), tr("red"), tr("pink")]
+        
         if 0 <= index < len(colors):
-            setThemeColor(colors[index])
-            # 立即保存设置
-            self.save_theme_setting("theme_color", colors[index])
+            selected_color = colors[index]
+            color_name = color_names[index]
+            
+            # 显示重启提示
+            dialog = MessageBox(
+                tr("restart_required"),
+                tr("theme_color_changed", color_name),
+                self.window()
+            )
+            
+            if dialog.exec():
+                # 保存主题色设置
+                self.save_theme_setting("theme_color", selected_color)
+                # 重启应用
+                import sys
+                from PyQt6.QtWidgets import QApplication
+                QApplication.quit()
+                import os
+                os.execl(sys.executable, sys.executable, *sys.argv)
+            else:
+                # 用户取消，恢复原来的选择
+                current_color = self.load_theme_setting("theme_color")
+                reverse_map = {color: idx for idx, color in enumerate(colors)}
+                self.color_combo.setCurrentIndex(reverse_map.get(current_color, 0))
+    
+    def notify_theme_changed(self):
+        """通知所有卡片组件主题已变化"""
+        # 更新日志显示组件的样式
+        if hasattr(self, 'log_view') and self.log_view:
+            if isDarkTheme():
+                self.log_view.setStyleSheet(
+                    "TextEdit { background: rgba(0,0,0,0.12); border-radius: 6px; "
+                    "font-size: 12px; padding: 8px; color: #ffffff; }"
+                )
+            else:
+                self.log_view.setStyleSheet(
+                    "TextEdit { background: rgba(0,0,0,0.05); border-radius: 6px; "
+                    "font-size: 12px; padding: 8px; color: #000000; }"
+                )
+            
+            # 强制刷新日志内容
+            self.log_view.update()
+            self.log_view.repaint()
     
     def save_theme_setting(self, key, value):
         """保存单个主题设置"""
@@ -4781,6 +5029,22 @@ class SettingsPage(ScrollArea):
                 json.dump(config, f, indent=2, ensure_ascii=False)
         except Exception as e:
             print(f"保存主题设置失败: {e}")
+    
+    def load_theme_setting(self, key):
+        """加载单个主题设置"""
+        try:
+            config_path = Path.cwd() / 'config.json'
+            if config_path.exists():
+                import json
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                return config.get(key)
+        except:
+            pass
+        
+        # 返回默认值
+        from backend import DEFAULT_CONFIG
+        return DEFAULT_CONFIG.get(key)
     
     def on_language_changed(self, index):
         """语言切换"""
@@ -4895,7 +5159,12 @@ class SettingsPage(ScrollArea):
                 msg.yesButton.setText(tr("go_to_download"))
                 msg.cancelButton.setText(tr("cancel"))
                 if msg.exec():
-                    QDesktopServices.openUrl(QUrl(info.get('release_url', f"https://github.com/{GITHUB_REPO}/releases")))
+                    # 获取镜像化的下载链接，直接跳转到具体的下载链接
+                    download_url = self._get_mirror_download_url(
+                        info.get('release_url', f"https://github.com/{GITHUB_REPO}/releases"),
+                        info.get('latest_version', '')
+                    )
+                    QDesktopServices.openUrl(QUrl(download_url))
             else:
                 InfoBar.success(
                     title=tr("already_latest"),
@@ -4921,6 +5190,53 @@ class SettingsPage(ScrollArea):
         worker.error.connect(on_error)
         worker.finished.connect(worker.deleteLater)
         worker.start()
+
+    def _get_mirror_download_url(self, original_url: str, latest_version: str = "") -> str:
+        """
+        获取镜像化的下载链接，中国大陆用户自动跳转镜像
+        优化：直接跳转到具体的下载链接而不是发布页面
+        """
+        # 检查当前是否在中国大陆
+        try:
+            import os
+            is_cn = os.environ.get('IS_CN', '').lower() == 'yes'
+            
+            # 如果有版本号，直接生成下载链接
+            if latest_version:
+                # 生成具体的下载链接格式：https://github.com/zhouchentao666/Fluent-Install/releases/download/{version}/FluentInstall.exe
+                download_url = f"https://github.com/{GITHUB_REPO}/releases/download/{latest_version}/FluentInstall.exe"
+                
+                if is_cn:
+                    # 中国大陆用户使用镜像
+                    mirror_urls = [
+                        f"https://gh-proxy.org/{download_url}",
+                        f"https://cdn.gh-proxy.org/{download_url}",
+                        f"https://edgeone.gh-proxy.org/{download_url}",
+                        f"https://ghp.ci/{download_url}",
+                    ]
+                    # 返回第一个镜像URL
+                    return mirror_urls[0]
+                else:
+                    # 非中国大陆用户使用原始链接
+                    return download_url
+            
+            # 如果没有版本号，使用原来的逻辑
+            if '/releases' in original_url and '/latest' not in original_url:
+                original_url = original_url.replace('/releases', '/releases/latest')
+            
+            if is_cn:
+                mirror_urls = [
+                    f"https://gh-proxy.org/{original_url}",
+                    f"https://cdn.gh-proxy.org/{original_url}",
+                    f"https://edgeone.gh-proxy.org/{original_url}",
+                    f"https://ghp.ci/{original_url}",
+                ]
+                return mirror_urls[0]
+            else:
+                return original_url
+                
+        except Exception:
+            return original_url
 
     def show_thanks(self):
         """显示鸣谢对话框"""
@@ -5152,6 +5468,12 @@ class SettingsPage(ScrollArea):
                 is_fixed = config.get("ST_Fixed_Version", True)  # 默认固定版本
                 self.st_mode_combo.setCurrentIndex(1 if is_fixed else 0)
             
+            # 加载固定版本manifest修复模式设置
+            if self.st_fixed_manifest_combo:
+                manifest_mode = config.get("ST_Fixed_Manifest_Mode", "ask")  # 默认询问
+                mode_map = {"always": 0, "never": 1, "ask": 2}
+                self.st_fixed_manifest_combo.setCurrentIndex(mode_map.get(manifest_mode, 2))
+            
             # 加载DLC超时时间
             if self.dlc_timeout_spinbox:
                 self.dlc_timeout_spinbox.setValue(config.get("DLCTimeout", 60))
@@ -5286,6 +5608,11 @@ class SettingsPage(ScrollArea):
             # 保存SteamTools版本模式设置
             if self.st_mode_combo:
                 config["ST_Fixed_Version"] = self.st_mode_combo.currentIndex() == 1
+            
+            # 保存固定版本manifest修复模式设置
+            if self.st_fixed_manifest_combo:
+                mode_map = {0: "always", 1: "never", 2: "ask"}
+                config["ST_Fixed_Manifest_Mode"] = mode_map.get(self.st_fixed_manifest_combo.currentIndex(), "ask")
             
             # 保存DLC超时时间
             if self.dlc_timeout_spinbox:
@@ -5461,7 +5788,6 @@ class MainWindow(MSFluentWindow):
             tr("launcher")
         )
 
-
         
         # 添加FAQ页面
         self.addSubInterface(
@@ -5572,7 +5898,7 @@ class MainWindow(MSFluentWindow):
         """重启完成"""
         if success:
             InfoBar.success(
-                title=tr("restart_success"),
+             title=tr("restart_success"),
                 content=tr("restart_success_message"),
                 parent=self,
                 position=InfoBarPosition.TOP
@@ -5627,6 +5953,28 @@ class MainWindow(MSFluentWindow):
                 json.dump(config, f, indent=2, ensure_ascii=False)
         except Exception as e:
             print(f"保存窗口特效设置失败: {e}")
+    
+    def notify_theme_changed(self):
+        """通知所有页面主题已变化"""
+        # 通知所有页面更新主题
+        pages = [
+            self.home_page,
+            self.search_page, 
+            self.launcher_page,
+            self.settings_page,
+            self.faq_page
+        ]
+        
+        for page in pages:
+            if hasattr(page, 'notify_theme_changed'):
+                page.notify_theme_changed()
+        
+        # 强制刷新所有页面布局
+        for page in pages:
+            if hasattr(page, 'update'):
+                page.update()
+            if hasattr(page, 'repaint'):
+                page.repaint()
 
 
 # ===== 自定义手风琴卡片 =====
