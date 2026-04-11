@@ -7028,6 +7028,7 @@ class SettingsPage(ScrollArea):
                 config["window_effect"] = effect_map.get(self.effect_combo.currentIndex(), "none")
             
             # 保存配置
+            config_path.parent.mkdir(parents=True, exist_ok=True)
             with open(config_path, 'w', encoding='utf-8') as f:
                 json.dump(config, f, indent=2, ensure_ascii=False)
             
