@@ -6,7 +6,7 @@ hero:
   text: "Steam 开源免费美观入库工具"
   tagline: 简洁高效，一键入库
   image:
-    src: /icon.ico
+    src: /Fluent-Install/icon.ico
     alt: Fluent Install
   actions:
     - theme: brand
