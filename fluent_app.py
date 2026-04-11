@@ -103,6 +103,10 @@ class QtLogHandler(QObject, logging.Handler):
         except Exception:
             pass
 
+    def __exit__(self, *args):
+        """阻止 with 语句自动释放，由 Python _python_exit() 统一释放"""
+        pass
+
 
 def load_theme_config():
     """加载主题配置"""
@@ -285,7 +289,7 @@ TEXTS = {
         "about_title": "关于",
         "thanks_title": "鸣谢",
         "about_text": "Cai Install - Fluent Design 版本\n\n版本: 1.7\n\n这是一个基于 PyQt6-Fluent-Widgets 的现代化 Steam 游戏解锁工具。\n\n功能特性:\n• Fluent Design 设计风格\n• 支持多种清单源\n• 游戏搜索和入库\n• 已入库游戏管理\n• 主题自定义\n\n项目地址: https://github.com/zhouchentao666/Cai-install-Fluent-GUI",
-        "thanks_text": "特别鸣谢\n\n开发者:\n• zhouchentao666 - 制作人员\n\n开源项目:\n• PyQt6 - Qt6 Python 绑定\n• PyQt-Fluent-Widgets - Fluent Design 组件库\n• Cai-install-Web-GUI - 原始项目作者\n• httpx - 异步 HTTP 客户端\n\n清单源提供:\n• SWA V2\n• Cysaw\n• Furcate\n• Walftech\n• steamdatabase\n• SteamAutoCracks\n• Sudama\n• 清单不求人\n\n社区与联系:\n• GitHub: https://github.com/zhouchentao666/Fluent-Install\n• 加入 Q 群: https://qm.qq.com/q/gtTLap5Jw4\n• TG 群组: https://t.me/+vTrqXKpRJE9kNmVl\n• TG 频道: https://t.me/FluentInstall\n• Discord: https://discord.gg/2qh68QRMuA\n\n感谢所有为本项目做出贡献的开发者和用户！",
+        "thanks_text": "特别鸣谢\n\n开发者:\n• zhouchentao666 - 制作人员\n\n开源项目:\n• PyQt6 - Qt6 Python 绑定\n• PyQt-Fluent-Widgets - Fluent Design 组件库\n• Cai-install-Web-GUI - 原始项目作者\n• httpx - 异步 HTTP 客户端\n• Game-Cheats-Manager - 修改器数据来源 (https://github.com/dyang886/Game-Cheats-Manager)\n\n清单源提供:\n• SWA V2\n• Cysaw\n• Furcate\n• Walftech\n• steamdatabase\n• SteamAutoCracks\n• Sudama\n• 清单不求人\n\n社区与联系:\n• GitHub: https://github.com/zhouchentao666/Fluent-Install\n• 加入 Q 群: https://qm.qq.com/q/gtTLap5Jw4\n• TG 群组: https://t.me/+vTrqXKpRJE9kNmVl\n• 感谢所有为本项目做出贡献的开发者和用户！",
         "donate": "捐赠",
         "donate_title": "支持开发者",
         "donate_desc": "如果本项目对你有帮助，欢迎请作者喝杯咖啡 ☕",
@@ -309,13 +313,6 @@ TEXTS = {
         "dlc_timeout_hint": "获取DLC列表超时时间，网络较差时可适当调大（秒）",
         "show_progress_bar": "显示进度条",
         "show_progress_bar_hint": "在搜索和入库过程中显示进度条，提供更好的用户体验",
-        "sidebar_settings": "侧栏显示设置（重启生效）",
-        "hide_search": "隐藏搜索入库",
-        "hide_search_hint": "隐藏侧栏中的搜索入库选项",
-        "hide_launcher": "隐藏联机游戏",
-        "hide_launcher_hint": "隐藏侧栏中的联机游戏选项",
-        "hide_trainer": "隐藏修改器",
-        "hide_trainer_hint": "隐藏侧栏中的修改器选项",
         "name_not_found": "名称未找到",
         "fetch_failed": "获取失败",
     },
@@ -452,7 +449,7 @@ TEXTS = {
         "about_title": "About",
         "thanks_title": "Credits",
         "about_text": "Cai Install - Fluent Design Version\n\nVersion: 1.7\n\nThis is a modern Steam game unlocking tool based on PyQt6-Fluent-Widgets.\n\nFeatures:\n• Fluent Design style\n• Support for multiple manifest sources\n• Game search and adding\n• Installed games management\n• Theme customization\n\nProject URL: https://github.com/zhouchentao666/Cai-install-Fluent-GUI",
-        "thanks_text": "Special Thanks\n\nDevelopers:\n• zhouchentao666 - Developer\n\nOpen Source Projects:\n• PyQt6 - Qt6 Python Bindings\n• PyQt-Fluent-Widgets - Fluent Design Component Library\n• Cai-install-Web-GUI - Original Project Author\n• httpx - Async HTTP Client\n\nManifest Sources:\n• SWA V2\n• Cysaw\n• Furcate\n• Walftech\n• steamdatabase\n• SteamAutoCracks\n• Sudama\n• Manifest Helper Library\n\nThanks to all developers and users who contributed to this project!",
+        "thanks_text": "Special Thanks\n\nDevelopers:\n• zhouchentao666 - Developer\n\nOpen Source Projects:\n• PyQt6 - Qt6 Python Bindings\n• PyQt-Fluent-Widgets - Fluent Design Component Library\n• Cai-install-Web-GUI - Original Project Author\n• httpx - Async HTTP Client\n• Game-Cheats-Manager - Trainer data source (https://github.com/dyang886/Game-Cheats-Manager)\n\nManifest Sources:\n• SWA V2\n• Cysaw\n• Furcate\n• Walftech\n• steamdatabase\n• SteamAutoCracks\n• Sudama\n• Manifest Helper Library\n\nThanks to all developers and users who contributed to this project!",
         "donate": "Donate",
         "donate_title": "Support the Developer",
         "donate_desc": "If this project has been helpful, feel free to buy the author a coffee ☕",
@@ -476,13 +473,6 @@ TEXTS = {
         "dlc_timeout_hint": "Timeout for fetching DLC list, increase if network is slow (seconds)",
         "show_progress_bar": "Show Progress Bar",
         "show_progress_bar_hint": "Show progress bar during search and installation for better user experience",
-        "sidebar_settings": "Sidebar Settings (Restart Required)",
-        "hide_search": "Hide Search",
-        "hide_search_hint": "Hide the search library option in sidebar",
-        "hide_launcher": "Hide Online Games",
-        "hide_launcher_hint": "Hide the online games option in sidebar",
-        "hide_trainer": "Hide Trainers",
-        "hide_trainer_hint": "Hide the trainers option in sidebar",
         "name_not_found": "Name Not Found",
         "fetch_failed": "Fetch Failed",
     },
@@ -651,13 +641,10 @@ TEXTS = {
         "dlc_timeout_hint": "Délai d'attente pour récupérer la liste DLC, augmenter si le réseau est lent (secondes)",
         "show_progress_bar": "Afficher la barre de progression",
         "show_progress_bar_hint": "Afficher la barre de progression pendant la recherche et l'ajout pour une meilleure expérience",
-        "sidebar_settings": "Paramètres de la barre latérale (Redémarrage requis)",
-        "hide_search": "Masquer la recherche",
+
+
         "hide_search_hint": "Masquer l'option de recherche dans la barre latérale",
-        "hide_launcher": "Masquer les jeux en ligne",
-        "hide_launcher_hint": "Masquer l'option des jeux en ligne dans la barre latérale",
-        "hide_trainer": "Masquer les trainers",
-        "hide_trainer_hint": "Masquer l'option des trainers dans la barre latérale",
+
         "name_not_found": "Nom introuvable",
         "fetch_failed": "Échec de récupération",
     },
@@ -826,13 +813,10 @@ TEXTS = {
         "dlc_timeout_hint": "Тайм-аут получения списка DLC, увеличьте при медленной сети (секунды)",
         "show_progress_bar": "Показывать индикатор прогресса",
         "show_progress_bar_hint": "Показывать индикатор прогресса во время поиска и добавления для лучшего опыта",
-        "sidebar_settings": "Настройки боковой панели (Требуется перезапуск)",
+
         "hide_search": "Скрыть поиск",
         "hide_search_hint": "Скрыть опцию поиска в боковой панели",
-        "hide_launcher": "Скрыть онлайн-игры",
-        "hide_launcher_hint": "Скрыть опцию онлайн-игр в боковой панели",
-        "hide_trainer": "Скрыть трейнеры",
-        "hide_trainer_hint": "Скрыть опцию трейнеров в боковой панели",
+
         "name_not_found": "Имя не найдено",
         "fetch_failed": "Ошибка получения",
     },
@@ -1001,13 +985,10 @@ TEXTS = {
         "dlc_timeout_hint": "Timeout für DLC-Liste, bei langsamen Netzwerk erhöhen (Sekunden)",
         "show_progress_bar": "Fortschrittsbalken anzeigen",
         "show_progress_bar_hint": "Fortschrittsbalken während Suche und Hinzufügen für bessere Benutzererfahrung anzeigen",
-        "sidebar_settings": "Seitenleisteneinstellungen (Neustart erforderlich)",
+
         "hide_search": "Suche ausblenden",
         "hide_search_hint": "Suchoption in der Seitenleiste ausblenden",
-        "hide_launcher": "Online-Spiele ausblenden",
-        "hide_launcher_hint": "Online-Spiele-Option in der Seitenleiste ausblenden",
-        "hide_trainer": "Trainer ausblenden",
-        "hide_trainer_hint": "Trainer-Option in der Seitenleiste ausblenden",
+
         "name_not_found": "Name nicht gefunden",
         "fetch_failed": "Abruf fehlgeschlagen",
     },
@@ -1176,8 +1157,8 @@ TEXTS = {
         "dlc_timeout_hint": "DLCリスト取得のタイムアウト、ネットワークが遅い場合は増やしてください（秒）",
         "show_progress_bar": "進捗バーを表示",
         "show_progress_bar_hint": "検索と追加中に進捗バーを表示して、より良いユーザー体験を提供",
-        "sidebar_settings": "サイドバー設定（再起動が必要）",
-        "hide_search": "検索を非表示",
+
+
         "hide_search_hint": "サイドバーの検索オプションを非表示",
         "hide_launcher": "オンラインゲームを非表示",
         "hide_launcher_hint": "サイドバーのオンラインゲームオプションを非表示",
@@ -1307,6 +1288,7 @@ TEXTS = {
         "check_update_failed": "檢查更新失敗",
         "restart_steam_title": "重新啟動 Steam",
         "restart_steam_confirm_message": "確定要重新啟動 Steam 嗎？\n\n這將關閉目前執行中的 Steam 並重新啟動。",
+        
         # 缺失的翻譯鍵
         "settings_log_title": "日誌",
         "tip": "提示",
@@ -1506,7 +1488,7 @@ _TRAINER_TEXTS = {
         "trainer_refresh_btn": "刷新",
         "trainer_open_folder": "打开目录",
         "trainer_no_installed": "暂无已安装的修改器",
-        "trainer_no_results": "未找到相关修改器",
+        "trainer_no_results": "未找到相关修改器(请关闭梯子重启后试试)",
         "trainer_searching": "正在搜索...",
         "trainer_downloading": "正在下载...",
         "trainer_download_success": "下载成功",
@@ -3732,6 +3714,7 @@ class SearchPage(ScrollArea):
         self.manifest_source_combo.addItems([
             tr("auto_select"),
             "Cysaw",
+            "GMRC",
             "Walftech",
             "Sudama",
             "清单不求人",
@@ -4142,6 +4125,7 @@ class SearchPage(ScrollArea):
             source_mapping = {
                 0: "auto",
                 1: "cysaw",
+                2: "gmrc",
                 3: "walftech",
                 4: "sudama",
                 5: "buqiuren",
@@ -4196,6 +4180,7 @@ class SearchPage(ScrollArea):
                 source_mapping = {
                     "auto": 0,
                     "cysaw": 1,
+                    "gmrc": 2,
                     "walftech": 3,
                     "sudama": 4,
                     "buqiuren": 5,
@@ -4731,6 +4716,7 @@ class SearchPage(ScrollArea):
         index_to_source = {
             0: "auto",
             1: "cysaw",
+            2: "gmrc",
             3: "walftech",
             4: "sudama",
             5: "buqiuren",
@@ -4811,10 +4797,9 @@ class SearchPage(ScrollArea):
                 # 自动选择模式：依次尝试所有ZIP源
                 if tool_type_actual == "auto":
                     auto_sources = [
+                        "sudama",
                         "cysaw",
                         "walftech",
-                        "sudama",
-                        "buqiuren",
                         "MHub",
                         "steamautocracks_v1",
                         "sac-other",
@@ -4865,7 +4850,7 @@ class SearchPage(ScrollArea):
                 github_repo_map = {
                     "github_auiowu": "Auiowu/ManifestAutoUpdate",
                 }
-                zip_sources = ["cysaw", "sac-other", "walftech", "steamautocracks_v2", "steamautocracks_v1", "sudama", "buqiuren", "MHub"]
+                zip_sources = ["cysaw", "gmrc", "sac-other", "walftech", "steamautocracks_v2", "steamautocracks_v1", "sudama", "buqiuren", "MHub"]
                 
                 # 更新进度条状态，并启用动画进度模式
                 if tool_type_actual in zip_sources:
@@ -5835,7 +5820,6 @@ class TrainerPage(ScrollArea):
 
 
 
-
 class SettingsPage(ScrollArea):
     """设置页面"""
     
@@ -5872,6 +5856,7 @@ class SettingsPage(ScrollArea):
         self.hide_search_check = None
         self.hide_launcher_check = None
         self.hide_trainer_check = None
+        self.sidebar_group = None
 
         self._config_loaded = False
         self.worker = None
@@ -5996,25 +5981,6 @@ class SettingsPage(ScrollArea):
         self.show_progress_check.setChecked(True)
         # 注意：信号连接移到 _setup_auto_save_listeners，避免配置加载前触发保存
         app_config_card.addGroup(FluentIcon.SYNC, tr("show_progress_bar"), tr("show_progress_bar_hint"), self.show_progress_check)
-
-        # 侧栏显示设置（信号在 _setup_auto_save_listeners 中连接）
-        sidebar_group = GroupHeaderCardWidget(self)
-        sidebar_group.setTitle(tr("sidebar_settings"))
-        sidebar_group.setBorderRadius(8)
-
-        self.hide_search_check = SwitchButton()
-        self.hide_search_check.setChecked(False)
-        sidebar_group.addGroup(FluentIcon.SEARCH, tr("hide_search"), tr("hide_search_hint"), self.hide_search_check)
-
-        self.hide_launcher_check = SwitchButton()
-        self.hide_launcher_check.setChecked(False)
-        sidebar_group.addGroup(FluentIcon.GAME, tr("hide_launcher"), tr("hide_launcher_hint"), self.hide_launcher_check)
-
-        self.hide_trainer_check = SwitchButton()
-        self.hide_trainer_check.setChecked(False)
-        sidebar_group.addGroup(FluentIcon.LIBRARY, tr("hide_trainer"), tr("hide_trainer_hint"), self.hide_trainer_check)
-
-        layout.addWidget(sidebar_group)
 
         # 创建 DLC 超时时间设置（左边输入框，右边滑块）
         self.dlc_timeout_edit = LineEdit()
@@ -6229,7 +6195,7 @@ class SettingsPage(ScrollArea):
         self.github_btn = HyperlinkButton("https://github.com/zhouchentao666/Fluent-Install", "GitHub")
         self.github_btn.setFixedWidth(70)
         button_layout.addWidget(self.github_btn)
-        self.document_btn = HyperlinkButton("https://ocnxrkefvsx5.feishu.cn/wiki/LFpuweKKlidyTmkU2hKcW5qGnZc", "文档")
+        self.document_btn = HyperlinkButton("https://zhouchentao666.github.io/Fluent-Install/", "文档")
         self.document_btn.setFixedWidth(70)
         button_layout.addWidget(self.document_btn)
         self.qq_btn = HyperlinkButton("https://qm.qq.com/q/gtTLap5Jw4", "Q群")
@@ -6238,9 +6204,6 @@ class SettingsPage(ScrollArea):
         self.tg_group_btn = HyperlinkButton("https://t.me/+vTrqXKpRJE9kNmVl", "TG")
         self.tg_group_btn.setFixedWidth(50)
         button_layout.addWidget(self.tg_group_btn)
-        self.discord_btn = HyperlinkButton("https://discord.gg/2qh68QRMuA", "Discord")
-        self.discord_btn.setFixedWidth(70)
-        button_layout.addWidget(self.discord_btn)
         button_layout.addStretch(1)
         layout.addLayout(button_layout)
         layout.addStretch(1)
@@ -6298,14 +6261,6 @@ class SettingsPage(ScrollArea):
         # 窗口特效
         if self.effect_combo:
             self.effect_combo.currentIndexChanged.connect(self._on_setting_changed)
-
-        # 侧栏隐藏设置
-        if self.hide_search_check:
-            self.hide_search_check.checkedChanged.connect(self._on_setting_changed)
-        if self.hide_launcher_check:
-            self.hide_launcher_check.checkedChanged.connect(self._on_setting_changed)
-        if self.hide_trainer_check:
-            self.hide_trainer_check.checkedChanged.connect(self._on_setting_changed)
 
     def _on_setting_changed(self):
         """设置改变时立即保存"""
@@ -6656,6 +6611,7 @@ class SettingsPage(ScrollArea):
                 add_link(inner_layout, "PyQt6", "https://pypi.org/project/PyQt6/")
                 add_link(inner_layout, "PyQt-Fluent-Widgets", "https://github.com/zhiyiYo/PyQt-Fluent-Widgets")
                 add_link(inner_layout, "Cai-install-Web-GUI", "https://github.com/ikunshare/Onekey")
+                add_link(inner_layout, "Game-Cheats-Manager", "https://github.com/dyang886/Game-Cheats-Manager")
                 add_link(inner_layout, "httpx", "https://www.python-httpx.org/")
 
                 add_section(inner_layout, "清单源提供")
@@ -6666,8 +6622,6 @@ class SettingsPage(ScrollArea):
                 add_link(inner_layout, "GitHub", "https://github.com/zhouchentao666/Fluent-Install")
                 add_link(inner_layout, "加入 Q 群", "https://qm.qq.com/q/gtTLap5Jw4")
                 add_link(inner_layout, "TG 群组", "https://t.me/+vTrqXKpRJE9kNmVl")
-                add_link(inner_layout, "TG 频道", "https://t.me/FluentInstall")
-                add_link(inner_layout, "Discord", "https://discord.gg/2qh68QRMuA")
 
                 add_text(inner_layout, "\n感谢所有为本项目做出贡献的开发者和用户！")
                 inner_layout.addStretch(1)
@@ -6902,38 +6856,6 @@ class SettingsPage(ScrollArea):
                     self.show_progress_check.setChecked(new_val)
                     self.show_progress_check.checkedChanged.connect(self._on_setting_changed)
 
-            # 加载侧栏隐藏设置
-            if self.hide_search_check:
-                new_val = config.get("hide_search", False)
-                if self.hide_search_check.isChecked() != new_val:
-                    try:
-                        self.hide_search_check.checkedChanged.disconnect(self._on_setting_changed)
-                    except:
-                        pass
-                    self.hide_search_check.setChecked(new_val)
-                    self.hide_search_check.checkedChanged.connect(self._on_setting_changed)
-
-            if self.hide_launcher_check:
-                new_val = config.get("hide_launcher", False)
-                if self.hide_launcher_check.isChecked() != new_val:
-                    try:
-                        self.hide_launcher_check.checkedChanged.disconnect(self._on_setting_changed)
-                    except:
-                        pass
-                    self.hide_launcher_check.setChecked(new_val)
-                    self.hide_launcher_check.checkedChanged.connect(self._on_setting_changed)
-
-            if self.hide_trainer_check:
-                new_val = config.get("hide_trainer", False)
-                if self.hide_trainer_check.isChecked() != new_val:
-                    try:
-                        self.hide_trainer_check.checkedChanged.disconnect(self._on_setting_changed)
-                    except:
-                        pass
-                    self.hide_trainer_check.setChecked(new_val)
-                    self.hide_trainer_check.checkedChanged.connect(self._on_setting_changed)
-
-
             # 加载语言设置
             if self.lang_combo:
                 # 先断开信号连接，避免触发 on_language_changed
@@ -7079,13 +7001,6 @@ class SettingsPage(ScrollArea):
             if self.show_progress_check:
                 config["show_progress_bar"] = self.show_progress_check.isChecked()
 
-            # 保存侧栏隐藏设置
-            if self.hide_search_check:
-                config["hide_search"] = self.hide_search_check.isChecked()
-            if self.hide_launcher_check:
-                config["hide_launcher"] = self.hide_launcher_check.isChecked()
-            if self.hide_trainer_check:
-                config["hide_trainer"] = self.hide_trainer_check.isChecked()
             # 保存主题模式
             if self.theme_combo:
                 theme_mode_map = {0: "light", 1: "dark", 2: "auto"}
@@ -7211,28 +7126,6 @@ class SettingsPage(ScrollArea):
 
 
 
-def load_sidebar_config():
-    """加载侧栏显示配置"""
-    try:
-        config_path = APP_ROOT / 'config' / 'config.json'
-        if config_path.exists():
-            import json
-            with open(config_path, 'r', encoding='utf-8') as f:
-                config = json.load(f)
-            return {
-                "hide_search": config.get("hide_search", False),
-                "hide_launcher": config.get("hide_launcher", False),
-                "hide_trainer": config.get("hide_trainer", False),
-            }
-    except:
-        pass
-    return {
-        "hide_search": False,
-        "hide_launcher": False,
-        "hide_trainer": False,
-    }
-
-
 class MainWindow(MSFluentWindow):
     """主窗口"""
 
@@ -7246,9 +7139,6 @@ class MainWindow(MSFluentWindow):
 
         # 设置标题栏（避免按钮重叠）
         self.titleBar.raise_()
-
-        # 加载侧栏配置
-        sidebar_config = load_sidebar_config()
 
         # 创建页面
         self.home_page = HomePage(self)
@@ -7264,29 +7154,27 @@ class MainWindow(MSFluentWindow):
             tr("home")
         )
 
-        # 根据配置显示/隐藏搜索入库
-        if not sidebar_config["hide_search"]:
-            self.addSubInterface(
-                self.search_page,
-                FluentIcon.SEARCH,
-                tr("search")
-            )
+        # 添加搜索入库
+        self.addSubInterface(
+            self.search_page,
+            FluentIcon.SEARCH,
+            tr("search")
+        )
 
-        # 根据配置显示/隐藏联机游戏
-        if not sidebar_config["hide_launcher"]:
-            self.addSubInterface(
-                self.launcher_page,
-                FluentIcon.GAME,
-                tr("launcher")
-            )
+        # 添加联机游戏
+        self.addSubInterface(
+            self.launcher_page,
+            FluentIcon.GAME,
+            tr("launcher")
+        )
 
-        # 根据配置显示/隐藏修改器
-        if not sidebar_config["hide_trainer"]:
-            self.addSubInterface(
-                self.trainer_page,
-                FluentIcon.LIBRARY,
-                tr("trainer_nav")
-            )
+        # 添加修改器
+        self.addSubInterface(
+            self.trainer_page,
+            FluentIcon.LIBRARY,
+            tr("trainer_nav")
+        )
+
         
         # 在导航栏底部添加设置
         self.addSubInterface(
@@ -7333,14 +7221,11 @@ class MainWindow(MSFluentWindow):
                 with open(config_path, 'r', encoding='utf-8') as f:
                     config = json.load(f)
                 default_page = config.get("default_page", "home")
-                # 检查侧栏隐藏设置
-                hide_search = config.get("hide_search", False)
             else:
                 default_page = "home"
-                hide_search = False
 
             # 切换到对应的界面
-            if default_page == "search" and not hide_search:
+            if default_page == "search":
                 self.switchTo(self.search_page)
             else:
                 self.switchTo(self.home_page)

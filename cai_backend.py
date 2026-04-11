@@ -13,15 +13,6 @@ import colorlog
 import httpx
 import winreg
 import ujson as json
-from pathlib import Path as _Path
-
-# 项目根目录（兼容直接运行和 PyInstaller 打包）
-def _get_app_root() -> _Path:
-    if getattr(sys, 'frozen', False):
-        return _Path(sys.executable).parent
-    return _Path(__file__).resolve().parent
-
-_APP_ROOT = _get_app_root()
 import vdf
 import zipfile
 import shutil
@@ -32,9 +23,8 @@ from pathlib import Path
 from typing import Tuple, Any, List, Dict, Literal
 from urllib.parse import quote
 
-CURRENT_VERSION = "2.6"  # 当前版本号
+CURRENT_VERSION = "2.7"  # 当前版本号
 GITHUB_REPO = "zhouchentao666/Fluent-Install"
-
 # --- LOGGING SETUP ---
 LOG_FORMAT = '%(log_color)s%(message)s'
 LOG_COLORS = {
@@ -80,17 +70,12 @@ DEFAULT_CONFIG = {
     "QA2": "Force_Unlocker: 强制指定解锁工具, 填入 'steamtools' 或 'greenluma'。留空则自动检测。",
     "QA3": "Custom_Repos: 自定义清单库配置。github数组用于添加GitHub仓库，zip数组用于添加ZIP清单库。",
     "QA4": "GitHub仓库格式: {\"name\": \"显示名称\", \"repo\": \"用户名/仓库名\"}",
-    "QA5": "ZIP清单库格式: {\"name\": \"显示名称\", \"url\": \"下载URL，用{app_id}作为占位符\"}",
-    "default_manifest_source": "auto",          # 默认清单源：auto/steamautocracks_v2/steamautocracks_v1等
-    "show_progress_bar": True,                   # 是否显示进度条
-    "hide_search": False,                        # 是否隐藏搜索入库
-    "hide_launcher": False,                      # 是否隐藏联机游戏
-    "hide_trainer": False,                       # 是否隐藏修改器
+    "QA5": "ZIP清单库格式: {\"name\": \"显示名称\", \"url\": \"下载URL，用{app_id}作为占位符\"}"
 }
 
 # --- 模块级游戏名称缓存（跨实例共享，避免重复请求）---
 _global_name_cache: Dict[str, str] = {}
-_name_cache_path = _APP_ROOT / 'config' / 'name_cache.json'
+_name_cache_path = Path.cwd() / 'name_cache.json'
 
 def _load_global_name_cache():
     global _global_name_cache
@@ -156,14 +141,14 @@ def get_steam_lang(lang_code: str) -> str:
 
 class CaiBackend:
     def __init__(self):
-        self.project_root = _APP_ROOT
+        self.project_root = Path.cwd()
         self.client: httpx.AsyncClient | None = None
         self.config = {}
         self.steam_path = None
         self.unlocker_type = None
         self.lock = asyncio.Lock()
         self.temp_path = self.project_root / 'temp'
-        self.manifest_record_path = self.project_root / 'config' / 'manifest_records.json'
+        self.manifest_record_path = self.project_root / 'manifest_records.json'
         self.log = self._init_log()
         self.name_cache: Dict[str, str] = _global_name_cache  # 引用全局缓存
 
@@ -480,7 +465,7 @@ class CaiBackend:
             self.log.warning(f"已根据配置强制使用解锁工具: {force_unlocker.capitalize()}")
         else:
             is_steamtools = (self.steam_path / 'config' / 'stplug-in').is_dir()
-            is_greenluma = any((self.steam_path / dll).exists() for dll in ['GreenLuma_2025_x86.dll', 'GreenLuma_2025_x64.dll'])
+            is_greenluma = any((self.steam_path / dll).exists() for dll in ['GreenLuma_2026_x86.dll', 'GreenLuma_2026_x64.dll'])
             if is_steamtools and is_greenluma:
                 self.log.error("环境冲突：同时检测到SteamTools和GreenLuma！请在设置中强制指定一个。")
                 self.unlocker_type = "conflict"
@@ -512,7 +497,7 @@ class CaiBackend:
         return ''.join(traceback.format_exception(type(exception), exception, exception.__traceback__))
 
     async def gen_config_file(self):
-        config_path = self.project_root / 'config' / 'config.json'
+        config_path = self.project_root / 'config.json'
         try:
         # 确保目录存在
             config_path.parent.mkdir(exist_ok=True, parents=True)
@@ -524,7 +509,7 @@ class CaiBackend:
             self.log.error(f'生成配置文件失败: {self.stack_error(e)}')
     
     async def load_config(self) -> Dict | None:
-        config_path = self.project_root / 'config' / 'config.json'
+        config_path = self.project_root / 'config.json'
         if not config_path.exists():
             await self.gen_config_file()
             return DEFAULT_CONFIG
@@ -630,7 +615,7 @@ class CaiBackend:
 
     async def get_launcher_profiles(self) -> List[Dict]:
         """获取所有联机启动配置"""
-        profile_path = self.project_root / 'config' / 'launcher_profiles.json'
+        profile_path = self.project_root / 'launcher_profiles.json'
         if not profile_path.exists():
             return []
         try:
@@ -643,7 +628,7 @@ class CaiBackend:
 
     async def save_launcher_profile(self, profile_data: Dict) -> Dict:
         """保存或更新单个启动配置"""
-        profile_path = self.project_root / 'config' / 'launcher_profiles.json'
+        profile_path = self.project_root / 'launcher_profiles.json'
         profiles = await self.get_launcher_profiles()
 
         is_update = False
@@ -666,7 +651,7 @@ class CaiBackend:
 
     async def delete_launcher_profile(self, profile_id: str) -> Dict:
         """删除启动配置"""
-        profile_path = self.project_root / 'config' / 'launcher_profiles.json'
+        profile_path = self.project_root / 'launcher_profiles.json'
         profiles = await self.get_launcher_profiles()
         new_profiles = [p for p in profiles if p.get('id') != profile_id]
 
@@ -1111,12 +1096,13 @@ class CaiBackend:
 
     def get_all_github_repos(self) -> List[str]:
         """获取所有GitHub仓库（内置+自定义）"""
-        builtin_repos = ['Auiowu/ManifestAutoUpdate']
+        builtin_repos = ['Auiowu/ManifestAutoUpdate','Satisl/MAU']
         custom_repos = [repo['repo'] for repo in self.get_custom_github_repos()]
         return builtin_repos + custom_repos
 
     # NEW: HTTP helper function for safe requests with retry mechanism
-    async def http_get_safe(self, url: str, timeout: int = None, max_retries: int = 3, retry_delay: float = 1.0) -> httpx.Response | None:
+# NEW: HTTP helper function for safe requests with retry mechanism
+    async def http_get_safe(self, url: str, timeout: int = None, max_retries: int = 3, retry_delay: float = 1.0, headers: Dict = None) -> httpx.Response | None:
         """安全的HTTP GET请求，带错误处理和重试机制"""
         if timeout is None:
             timeout = self.config.get("download_timeout", 30)
@@ -1127,7 +1113,8 @@ class CaiBackend:
                 # Use different timeout strategies for different attempts
                 current_timeout = timeout if attempt == 0 else min(timeout * (attempt + 1), 60)
                 
-                response = await self.client.get(url, timeout=current_timeout)
+                # --- MODIFIED: Added headers support ---
+                response = await self.client.get(url, timeout=current_timeout, headers=headers)
                 if response.status_code == 200:
                     if attempt > 0:  # Log successful retry
                         self.log.info(f"HTTP请求在第 {attempt + 1} 次尝试后成功: {url}")
@@ -1139,35 +1126,19 @@ class CaiBackend:
                             await asyncio.sleep(retry_delay * (attempt + 1))
                             continue
                     return None
-                    
-            except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.TimeoutException) as e:
-                last_exception = e
-                self.log.warning(f"HTTP请求超时: {url} (尝试 {attempt + 1}/{max_retries}) - {e}")
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(retry_delay * (attempt + 1))
-                    continue
-                    
-            except (httpx.ConnectError, httpx.RemoteProtocolError) as e:
-                last_exception = e
-                self.log.warning(f"HTTP连接错误: {url} (尝试 {attempt + 1}/{max_retries}) - {e}")
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(retry_delay * (attempt + 1))
-                    continue
-                    
             except Exception as e:
                 last_exception = e
-                self.log.error(f"HTTP请求异常: {url} (尝试 {attempt + 1}/{max_retries}) - {e}")
+                self.log.warning(f"HTTP请求异常: {e} - {url} (尝试 {attempt + 1}/{max_retries})")
                 if attempt < max_retries - 1:
                     await asyncio.sleep(retry_delay * (attempt + 1))
-                    continue
-                break
-        
-        self.log.error(f"HTTP请求在 {max_retries} 次尝试后仍然失败: {url} - 最后异常: {last_exception}")
+                    
+        if last_exception:
+            self.log.debug(f"HTTP请求最终失败: {url} - {last_exception}")
         return None
 
     # NEW: Updated DLC retrieval function with better error handling
     async def get_dlc_ids_safe(self, appid: str) -> List[str]:
-        """安全的DLC ID获取函数，支持多数据源回退 (CaiGames -> steamcmd -> steam store)"""
+        """安全的DLC ID获取函数"""
         self.log.info(f"正在获取 AppID {appid} 的DLC信息...")
 
         def parse_steamcmd_style_json(json_data: dict) -> List[str]:
@@ -1189,7 +1160,7 @@ class CaiBackend:
             f"https://api.9178666.xyz/cmd/{appid}", 
             timeout=20, 
             max_retries=2,
-            headers={'X-Client-Auth': 'CaiGames-pvzcxw'}
+            headers=CAIGAMES_HEADERS
         )
         if data:
             try:
@@ -1244,7 +1215,7 @@ class CaiBackend:
 
     # NEW: Updated depot retrieval function with better error handling
     async def _get_cached_app_tokens(self) -> Dict[str, str]:
-        cache_file = self.project_root / "config" / "app_tokens_cache.json"
+        cache_file = self.project_root / "app_tokens_cache.json"
         current_time = time.time()
         if cache_file.exists():
             try:
@@ -1355,13 +1326,12 @@ class CaiBackend:
                 pass
             return out
 
-        # 1. 尝试 CaiGames 源 (国内优化)
         self.log.debug(f"尝试从 CaiGames源 获取 AppID {appid} 的Depot...")
         data = await self.http_get_safe(
             f"https://api.9178666.xyz/cmd/{appid}", 
             timeout=20, 
             max_retries=2,
-            headers={'X-Client-Auth': 'CaiGames-pvzcxw'}
+            headers=CAIGAMES_HEADERS
         )
         if data:
             try:
@@ -1369,12 +1339,8 @@ class CaiBackend:
                 if out:
                     self.log.info(f"从 CaiGames源 成功获取到 {len(out)} 个Depot")
                     return out
-                if "data" in data.json():
-                     self.log.debug(f"CaiGames源 返回数据中无Depot信息")
             except Exception as e:
                 self.log.warning(f"解析 CaiGames源 Depot 信息失败: {e}")
-        else:
-            self.log.warning(f"无法从 CaiGames源 获取 AppID {appid} 的Depot数据")
 
         # 2. 尝试 SteamCMD API (原源)
         self.log.debug(f"尝试从 SteamCMD API 获取 AppID {appid} 的Depot...")
@@ -1848,7 +1814,7 @@ class CaiBackend:
         核心函数：获取 Sudama 密钥数据
         逻辑：检查本地 sudama_cache.json -> 检查时间戳是否超过24小时 -> 下载或读取缓存
         """
-        cache_file = self.project_root / "config" / "sudama_cache.json"
+        cache_file = self.project_root / "sudama_cache.json"
         current_time = time.time()
         one_day_seconds = 86400
 
@@ -1934,8 +1900,8 @@ class CaiBackend:
         try:
             self.log.info(f'正从 Sudama 库处理 AppID {app_id} 的清单...')
             
-            # 1. 获取 Depot 和 Manifest 信息 (使用现有的 SteamUI/DDXNB 接口)
-            depot_manifest_map = await self._get_depots_and_manifests_from_steamui(app_id)
+            # 1. 获取 Depot 和 Manifest 信息 (使用现有的 api 接口)
+            depot_manifest_map = await self._get_depots_and_manifests(app_id)
             if not depot_manifest_map:
                 self.log.warning(f"未能从 API 获取到 AppID {app_id} 的 depot 信息，跳过该AppID的处理")
                 return True  # 返回True表示跳过了处理，而不是失败
@@ -2069,6 +2035,75 @@ class CaiBackend:
             if extract_path.exists():
                 shutil.rmtree(extract_path, ignore_errors=True)
 
+    async def _process_gmrc_manifest(self, app_id: str, unlocker_type: str, use_st_auto_update: bool, add_all_dlc: bool, patch_depot_key: bool) -> bool:
+        """处理 gmrc 清单下载（gmrc.wudrm.com，按 manifest ID 逐个下载）"""
+        self.log.info(f"正从 GMRC 处理 AppID {app_id} 的清单...")
+        try:
+            # 1. 获取 depot/manifest 映射
+            depot_manifest_map = await self._get_depots_and_manifests(app_id)
+            if not depot_manifest_map:
+                self.log.warning(f"GMRC: 未能获取 AppID {app_id} 的 depot 信息")
+                return False
+
+            self.log.info(f"GMRC: 获取到 {len(depot_manifest_map)} 个 depot")
+
+            # 2. 逐个下载 manifest 文件
+            success_count = 0
+            depotcache_paths = [
+                self.steam_path / 'config' / 'depotcache',
+                self.steam_path / 'depotcache',
+            ]
+            for p in depotcache_paths:
+                p.mkdir(parents=True, exist_ok=True)
+
+            for depot_id, manifest_id in depot_manifest_map.items():
+                url = f"http://gmrc.wudrm.com/manifest/{manifest_id}"
+                try:
+                    resp = await self.client.get(url, timeout=30, follow_redirects=True)
+                    if resp.status_code == 404:
+                        self.log.warning(f"GMRC: manifest {manifest_id} 未找到 (404)")
+                        continue
+                    if resp.status_code != 200:
+                        self.log.warning(f"GMRC: manifest {manifest_id} 下载失败，状态码 {resp.status_code}")
+                        continue
+                    content = resp.content
+                    filename = f"{depot_id}_{manifest_id}.manifest"
+                    for p in depotcache_paths:
+                        (p / filename).write_bytes(content)
+                    self.log.info(f"GMRC: 已下载 {filename}")
+                    success_count += 1
+                except Exception as e:
+                    self.log.warning(f"GMRC: 下载 manifest {manifest_id} 失败: {e}")
+
+            if success_count == 0:
+                self.log.error(f"GMRC: AppID {app_id} 没有成功下载任何清单")
+                return False
+
+            # 3. 生成 lua 文件（SteamTools）
+            if unlocker_type == "steamtools":
+                stplug_path = self.steam_path / 'config' / 'stplug-in'
+                stplug_path.mkdir(parents=True, exist_ok=True)
+                lua_filepath = stplug_path / f"{app_id}.lua"
+                async with aiofiles.open(lua_filepath, mode="w", encoding="utf-8") as f:
+                    await f.write(f'addappid({app_id})\n')
+                    for depot_id, manifest_id in depot_manifest_map.items():
+                        line = f'setManifestid({depot_id}, "{manifest_id}")\n'
+                        await f.write('--' + line if use_st_auto_update else line)
+                self.log.info(f"GMRC: 已生成 {app_id}.lua")
+                if add_all_dlc:
+                    await self._add_free_dlcs_to_lua(app_id, lua_filepath)
+                if patch_depot_key:
+                    await self.patch_lua_with_depotkey(app_id, lua_filepath)
+            else:
+                all_depots = {}
+                if all_depots:
+                    await self.depotkey_merge(self.steam_path / 'config' / 'config.vdf', {'depots': all_depots})
+
+            self.log.info(f"GMRC: 成功处理 AppID {app_id}，下载了 {success_count} 个清单")
+            return True
+        except Exception as e:
+            self.log.error(f"处理 GMRC 清单时出错: {self.stack_error(e)}")
+            return False
 
     async def _process_mhub_manifest(self, app_id: str, unlocker_type: str, use_st_auto_update: bool, add_all_dlc: bool, patch_depot_key: bool) -> bool:
         """处理 MHub 清单下载（steamhub.156354.xyz）"""
@@ -2186,13 +2221,13 @@ class CaiBackend:
         try:
             self.log.info(f'正从 清单不求人库 处理 AppID {app_id} 的清单...')
             
-            # 使用steamui API获取depot和manifest信息（复用现有逻辑）
-            depot_manifest_map = await self._get_depots_and_manifests_from_steamui(app_id)
+            # 使用 API获取depot和manifest信息（复用现有逻辑）
+            depot_manifest_map = await self._get_depots_and_manifests(app_id)
             if not depot_manifest_map:
-                self.log.warning(f"未能从 steamui API 获取到 AppID {app_id} 的 depot 信息，跳过该AppID的处理")
+                self.log.warning(f"未能从 API 获取到 AppID {app_id} 的 depot 信息，跳过该AppID的处理")
                 return True  # 返回True表示跳过了处理，而不是失败
             
-            self.log.info(f"从 steamui API 获取到 {len(depot_manifest_map)} 个 depot 及其 manifest")
+            self.log.info(f"从 API 获取到 {len(depot_manifest_map)} 个 depot 及其 manifest")
             
             # 下载所有depot的清单
             success_count = 0
@@ -2428,17 +2463,17 @@ class CaiBackend:
         return data or {}
 
     async def process_steamautocracks_v2_manifest(self, app_id: str, unlocker_type: str, use_st_auto_update: bool, add_all_dlc: bool = False, patch_depot_key: bool = False) -> bool:
-        """处理 SteamAutoCracks/ManifestHub(2) 清单库 - 使用 steamui API 获取 depot 和 manifest 信息"""
+        """处理 SteamAutoCracks/ManifestHub(2) 清单库 - 使用  API 获取 depot 和 manifest 信息"""
         try:
             self.log.info(f'正从 SteamAutoCracks/ManifestHub(2) 处理 AppID {app_id} 的清单...')
             
-            # 1. 从 steamui API 获取 depot 和 manifest 信息
-            depot_manifest_map = await self._get_depots_and_manifests_from_steamui(app_id)
+            # 1. 从  API 获取 depot 和 manifest 信息
+            depot_manifest_map = await self._get_depots_and_manifests(app_id)
             if not depot_manifest_map:
-                self.log.warning(f"未能从 steamui API 获取到 AppID {app_id} 的 depot 信息，跳过该AppID的处理")
+                self.log.warning(f"未能从 API 获取到 AppID {app_id} 的 depot 信息，跳过该AppID的处理")
                 return True  # 返回True表示跳过了处理，而不是失败
             
-            self.log.info(f"从 steamui API 获取到 {len(depot_manifest_map)} 个 depot 及其 manifest")
+            self.log.info(f"从 API 获取到 {len(depot_manifest_map)} 个 depot 及其 manifest")
             
             # 2. 下载 depotkeys.json（复用现有方法）
             if 'IS_CN' not in os.environ:
@@ -2479,129 +2514,32 @@ class CaiBackend:
             self.log.error(f'处理 SteamAutoCracks/ManifestHub(2) 清单时出错: {self.stack_error(e)}')
             return False
 
-    async def _get_depots_and_manifests_from_caigames(self, app_id: str) -> Dict[str, str]:
-        """从备用API (api.9178666.xyz) 获取 depot 和对应的 manifest 信息"""
-        try:
-            url = f"https://api.9178666.xyz/cmd/{app_id}"
-            response = await self.client.get(url, timeout=20, headers=CAIGAMES_HEADERS)
-            response.raise_for_status()
-
-            data = response.json()
-            
-            # Check for success status in the API response
-            if data.get("status") != "success" or not data.get("data"):
-                self.log.warning(f"备用API返回错误或无数据 for AppID {app_id}，跳过该AppID的处理")
-                return {}
-
-            app_data = data["data"].get(app_id)
-            if not app_data or "depots" not in app_data:
-                self.log.warning(f"备用API响应中未找到 AppID {app_id} 的 depots 信息，跳过该AppID的处理")
-                return {}
-            
-            depots = app_data["depots"]
-            depot_manifest_map = {}
-
-            for depot_id, depot_info in depots.items():
-                if not depot_id.isdigit():
-                    continue
-
-                if isinstance(depot_info, dict):
-                    manifests = depot_info.get("manifests", {})
-                    public_manifest = manifests.get("public", {})
-                    manifest_id = public_manifest.get("gid")
-
-                    if manifest_id:
-                        depot_manifest_map[depot_id] = str(manifest_id)
-                        self.log.info(f"从备用API发现有效 depot: {depot_id}, manifest: {manifest_id}")
-
-            if depot_manifest_map:
-                self.log.info(f"从备用API总共找到 {len(depot_manifest_map)} 个有效的 depot 及其 manifest")
-            else:
-                self.log.warning(f"备用API未找到 AppID {app_id} 的任何有效 depot-manifest 映射，跳过该AppID的处理")
-
-            return depot_manifest_map
-
-        except Exception as e:
-            self.log.warning(f"从备用API (api.9178666.xyz) 获取 AppID {app_id} 的 depot 信息失败: {e}，跳过该AppID的处理")
-            return {}
-
-    async def _get_depots_and_manifests_from_steamui(self, app_id: str) -> Dict[str, str]:
-        """从 steamui API 获取 depot 和对应的 manifest 信息，失败时使用备用API"""
-        # 1. 尝试主API (steamui.com)
-        vdf_content = "" # Initialize to ensure it exists for logging on failure
-        try:
-            self.log.info(f"正从主API (steamui.com) 获取 AppID {app_id} 的信息...")
-            url = f"https://steamui.com/api/get_appinfo.php?appid={app_id}"
-            response = await self.client.get(url, timeout=20)
-            response.raise_for_status()
-            
-            vdf_content = response.text
-            
-            import vdf # Local import to avoid dependency issues if VDF is not always used
-            data = vdf.loads(vdf_content)
-            
-            depot_manifest_map = {}
-            
-            # First-level check for depots
-            for key, value in data.items():
-                if key.isdigit() and isinstance(value, dict):
-                    if 'manifests' in value and value['manifests']:
-                        manifests = value['manifests']
-                        if isinstance(manifests, dict) and 'public' in manifests:
-                            public_manifest = manifests['public']
-                            if isinstance(public_manifest, dict) and 'gid' in public_manifest:
-                                manifest_id = public_manifest['gid']
-                                depot_manifest_map[key] = manifest_id
-            
-            # Fallback checks for different VDF structures if first-level fails
-            if not depot_manifest_map:
-                if 'depots' in data:
-                    depots = data['depots']
-                    for depot_id, depot_info in depots.items():
-                        if depot_id.isdigit() and isinstance(depot_info, dict):
-                            if 'manifests' in depot_info and depot_info['manifests']:
-                                manifests = depot_info['manifests']
-                                if isinstance(manifests, dict) and 'public' in manifests:
-                                    public_manifest = manifests['public']
-                                    if isinstance(public_manifest, dict) and 'gid' in public_manifest:
-                                        manifest_id = public_manifest['gid']
-                                        depot_manifest_map[depot_id] = manifest_id
-                
-                if not depot_manifest_map:
-                    for key, value in data.items():
-                        if isinstance(value, dict) and 'depots' in value:
-                            depots = value['depots']
-                            for depot_id, depot_info in depots.items():
-                                if depot_id.isdigit() and isinstance(depot_info, dict):
-                                    if 'manifests' in depot_info and depot_info['manifests']:
-                                        manifests = depot_info['manifests']
-                                        if isinstance(manifests, dict) and 'public' in manifests:
-                                            public_manifest = manifests['public']
-                                            if isinstance(public_manifest, dict) and 'gid' in public_manifest:
-                                                manifest_id = public_manifest['gid']
-                                                depot_manifest_map[depot_id] = manifest_id
-
-            if depot_manifest_map:
-                self.log.info(f"从主API (steamui.com) 成功获取 {len(depot_manifest_map)} 个 depot。")
-                return depot_manifest_map
-            else:
-                # 没有找到depot信息，返回空字典让调用者处理
-                self.log.warning(f"主API响应成功，但未解析到 AppID {app_id} 的任何depot信息，跳过该AppID的处理")
-                return {}
-
-        except Exception as e:
-            # 针对403错误给出更清晰的提示
-            if "403" in str(e):
-                self.log.warning(f"主API (steamui.com) 返回403错误，AppID {app_id} 可能被限制访问")
-            else:
-                self.log.warning(f"主API (steamui.com) 访问或解析失败: {e}")
-            
-            if vdf_content:
-                self.log.warning(f"主API返回内容预览: {vdf_content[:300]}...")
-            self.log.info("正在尝试备用API (api.9178666.xyz)...")
+    async def _get_depots_and_manifests(self, app_id: str) -> Dict[str, str]:
+        """
+        统一获取 depot 和 manifest 映射：
+        底层直接调用 get_depots_safe，依次极速尝试 Token -> CaiGames -> SteamCMD -> Steam 官方 API。
+        """
+        depot_manifest_map = {}
+        self.log.info(f"正尝试获取 AppID {app_id} 的 Depot 与 Manifest 映射信息...")
         
-        # 2. 如果主API失败，调用备用API
-        return await self._get_depots_and_manifests_from_caigames(app_id)
+        try:
+            # get_depots_safe 已经实现了最高效的优先级链路
+            safe_depots = await self.get_depots_safe(app_id)
+            if safe_depots:
+                for depot_id, manifest_id, size, source in safe_depots:
+                    # 过滤掉无效的数据
+                    if depot_id and manifest_id:
+                        depot_manifest_map[str(depot_id)] = str(manifest_id)
+                
+                if depot_manifest_map:
+                    self.log.info(f"成功获取 {len(depot_manifest_map)} 个 depot 映射（包含隐藏Depot）。")
+                    return depot_manifest_map
+                    
+            self.log.warning(f"未能解析到 AppID {app_id} 的任何有效 depot 映射。")
+        except Exception as e:
+            self.log.warning(f"获取 AppID {app_id} depot 映射时发生异常: {e}")
+            
+        return depot_manifest_map
 
     async def _process_steamautocracks_v2_for_steamtools(self, app_id: str, valid_depots: Dict[str, str], depot_manifest_map: Dict[str, str], use_st_auto_update: bool, add_all_dlc: bool, patch_depot_key: bool, depotkeys_data: Dict) -> bool:
         """为 SteamTools 处理 SteamAutoCracks/ManifestHub(2) 清单"""
@@ -2624,7 +2562,7 @@ class CaiBackend:
             for depot_id, depotkey in valid_depots.items():
                 lines.append(f'addappid({depot_id}, 1, "{depotkey}")')
             
-            # 添加 setManifestid 行（使用从 steamui API 获取的 manifest 信息）
+            # 添加 setManifestid 行（使用从  API 获取的 manifest 信息）
             manifest_lines = []
             for depot_id in valid_depots.keys():
                 if depot_id in depot_manifest_map:
@@ -3235,7 +3173,9 @@ class CaiBackend:
         # 特殊处理 MHub：先获取 token，再下载
         if tool_type == "MHub":
             return await self._process_mhub_manifest(app_id, unlocker_type, use_st_auto_update, add_all_dlc, patch_depot_key)
-        
+        # 特殊处理 gmrc：按 manifest ID 逐个下载
+        if tool_type == "gmrc":
+            return await self._process_gmrc_manifest(app_id, unlocker_type, use_st_auto_update, add_all_dlc, patch_depot_key)
         if tool_type == "buqiuren":
             return await self.process_buqiuren_manifest(app_id)
             
@@ -3433,6 +3373,57 @@ class CaiBackend:
         return user_input if user_input.isdigit() else None
 
     async def find_appid_by_name(self, game_name: str, lang: str = "schinese") -> List[Dict]:
+        try:
+            self.log.info(f"正在尝试搜索游戏: {game_name}")
+
+            # 优先使用小黑盒+steam增强搜索
+            r = await self.client.get(
+                "https://api.9178666.xyz/steam",
+                params={'term': game_name, 'cc': 'cn'},
+                headers={
+                    "X-Client-Auth": "CaiGames-pvzcxw",
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                    "Accept": "application/json"
+                },
+                timeout=20
+            )
+            if r.status_code != 403:
+                r.raise_for_status()
+                resp_json = r.json()
+                raw_data = resp_json.get("data", []) if isinstance(resp_json, dict) and (resp_json.get("status") == "ok" or "data" in resp_json) else []
+                results = [{'appid': str(i.get('appid')), 'name': i.get('name'), 'header_image': i.get('image')} for i in raw_data if i.get('appid') and i.get('name')]
+                if results:
+                    self.log.info(f"小黑盒+steam增强搜索 成功找到 {len(results)} 个匹配结果")
+                    return results
+            else:
+                self.log.warning("小黑盒+steam增强搜索 返回 403，切换到 CaiGames API")
+        except Exception as e:
+            self.log.warning(f"小黑盒+steam增强搜索 失败，切换到 CaiGames API: {e}")
+
+        # 备用：CaiGames API
+        try:
+            r = await self.client.get(
+                "https://api.9178666.xyz/search",
+                params={'term': game_name},
+                headers={
+                    "X-Client-Auth": "CaiGames-pvzcxw",
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                    "Accept": "application/json"
+                },
+                timeout=20
+            )
+            if r.status_code != 403:
+                r.raise_for_status()
+                resp_json = r.json()
+                raw_data = resp_json.get("data", []) if isinstance(resp_json, dict) and (resp_json.get("status") == "ok" or "data" in resp_json) else []
+                results = [{'appid': str(i.get('appid')), 'name': i.get('name'), 'header_image': i.get('image')} for i in raw_data if i.get('appid') and i.get('name')]
+                if results:
+                    self.log.info(f"CaiGames API 成功找到 {len(results)} 个匹配结果")
+                    return results
+            else:
+                self.log.warning("CaiGames API 返回 403，切换到 Steam 搜索")
+        except Exception as e:
+            self.log.warning(f"CaiGames API 搜索失败，切换到 Steam 搜索: {e}")
 
         # 备用：Steam 商店搜索
         try:
@@ -3683,7 +3674,7 @@ class CaiBackend:
 import sys, os
 from pathlib import Path
 sys.path.insert(0, r"{self.project_root}")
-from cai_backend import CaiBackend
+from backend import CaiBackend
 b = CaiBackend()
 result = b.{"enable_steam_accelerate" if enable else "disable_steam_accelerate"}()
 print("OK" if result["success"] else result.get("error","fail"))
@@ -3758,8 +3749,7 @@ print("OK" if result["success"] else result.get("error","fail"))
             self.log.error(f"[固定版本] 更新 lua 文件失败: {e}")
 
     async def complete_manifest_files(self, app_id: str, progress_callback=None, cancel_check=None) -> Dict:
-        """主入库成功后的补全清单文件步骤：按 depot API 补全下载 manifest。
-        如果启用了 SteamTools 固定版本模式，会自动更新 lua 文件添加 setManifestid 配置。"""
+        """主入库成功后的补全清单文件步骤：按 depot API 补全下载 manifest。"""
 
         def _report(progress: int, text: str = ""):
             if callable(progress_callback):
@@ -3786,29 +3776,42 @@ print("OK" if result["success"] else result.get("error","fail"))
             self.log.info(f"[补全清单文件] 开始补全 AppID {app_id} 的 manifest 文件...")
             _report(5, "补全清单文件：准备阶段（读取 Depot 列表）")
 
-            api_url = f"https://manifest.steam.run/api/depot/{app_id}"
-            response = await self.http_get_safe(
-                api_url,
-                timeout=max(20, self.config.get("download_timeout", 30)),
-                max_retries=3
-            )
-            if not response:
-                msg = "补全清单文件失败：无法获取 depot 列表"
-                self.log.error(f"[补全清单文件] {msg} ({api_url})")
-                return {"success": False, "message": msg, "downloaded": 0, "total": 0}
-
+            # ================== 修改部分开始 ==================
+            depots = []
             try:
-                payload = response.json()
+                # 优先使用我们统一的底层方法（带 Token 和 SteamCMD 官方链路解析）获取最全列表
+                depot_map = await self._get_depots_and_manifests(app_id)
+                if depot_map:
+                    depots = [{"depotid": k, "manifestid": v} for k, v in depot_map.items()]
             except Exception as e:
-                msg = f"补全清单文件失败：Depot API JSON 解析失败: {e}"
-                self.log.error(f"[补全清单文件] {msg}")
-                return {"success": False, "message": msg, "downloaded": 0, "total": 0}
+                self.log.warning(f"[补全清单文件] 获取统一下发清单失败，准备降级使用 manifest.steam.run: {e}")
 
-            depots = payload.get("depots", []) if isinstance(payload, dict) else []
+            # 如果统一获取失败，再退回原来的 manifest.steam.run 老 API
+            if not depots:
+                api_url = f"https://manifest.steam.run/api/depot/{app_id}"
+                response = await self.http_get_safe(
+                    api_url,
+                    timeout=max(20, self.config.get("download_timeout", 30)),
+                    max_retries=3
+                )
+                if not response:
+                    msg = "补全清单文件失败：无法获取 depot 列表"
+                    self.log.error(f"[补全清单文件] {msg} ({api_url})")
+                    return {"success": False, "message": msg, "downloaded": 0, "total": 0}
+
+                try:
+                    payload = response.json()
+                    depots = payload.get("depots", []) if isinstance(payload, dict) else []
+                except Exception as e:
+                    msg = f"补全清单文件失败：Depot API JSON 解析失败: {e}"
+                    self.log.error(f"[补全清单文件] {msg}")
+                    return {"success": False, "message": msg, "downloaded": 0, "total": 0}
+
             if not depots:
                 msg = "补全清单文件失败：Depot 列表为空"
                 self.log.warning(f"[补全清单文件] {msg}")
                 return {"success": False, "message": msg, "downloaded": 0, "total": 0}
+            # ================== 修改部分结束 ==================
 
             self.log.info(f"[补全清单文件] 获取到 {len(depots)} 个 depots，开始镜像测速与下载")
             _report(15, f"补全清单文件：识别镜像源（共 {len(depots)} 个文件）")

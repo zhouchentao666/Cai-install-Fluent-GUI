@@ -27,6 +27,8 @@ def build_exe():
         '--add-data=GBE_Patch;GBE_Patch',  # 添加 GBE_Patch 目录 (D加密GBE模式需要)
         '--add-data=GreenLuma_2026_1.7.4-Steam006;GreenLuma',  # 添加 GreenLuma 目录 (D加密GreenLuma模式需要)
         '--hidden-import=cai_backend',  # 显式导入 cai_backend 模块
+        '--hidden-import=backend.authorizer_backend',  # 显式导入 backend 授权模块
+        '--hidden-import=backend.cw_extractor_core',  # 显式导入 backend CW提取模块
         '--hidden-import=backend.trainer_backend',  # 显式导入 backend 修改器模块
         '--hidden-import=PyQt6',  # 显式导入 PyQt6
         '--hidden-import=qfluentwidgets',  # 显式导入 qfluentwidgets
@@ -97,6 +99,20 @@ def build_exe():
         print("\n打包完成！")
         print(f"生成的 exe 文件在: {current_dir / 'dist' / 'FluentInstall.exe'}")
         
+        # 添加D加密
+        print("\n正在添加D加密...")
+        drm_script = current_dir / 'backend' / '_insert_drm.py'
+        exe_file = current_dir / 'dist' / 'FluentInstall.exe'
+        
+        if drm_script.exists() and exe_file.exists():
+            try:
+                import subprocess
+                subprocess.run([sys.executable, str(drm_script), str(exe_file)], check=True)
+                print("D加密添加成功！")
+            except Exception as e:
+                print(f"添加D加密失败: {e}")
+        else:
+            print("警告: 无法添加D加密，脚本或可执行文件不存在")
         
     except Exception as e:
         print(f"打包失败: {e}")

@@ -21,4 +21,5 @@ requests>=2.31.0      # HTTP请求，用于CW授权码下载
 
 # 修改器下载依赖
 cloudscraper>=1.2.71   # 绕过Cloudflare等反爬虫保护
+beautifulsoup4>=4.12.0  # HTML解析，用于修改器页面爬取
 rarfile>=4.0          # RAR文件解压
