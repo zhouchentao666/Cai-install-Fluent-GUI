@@ -1,11 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-修改器后端 - 直接爬取 FLiNG 公开页面，无需任何 API key。
+修改器后端 - 支持 FLiNG 等多数据源。
 
 数据来源:
-  搜索列表: https://archive.flingtrainer.com/  (完整 A-Z 列表，带下载链接)
-  主站新版: https://flingtrainer.com/all-trainers-a-z/ (较新修改器)
-  下载:     直接从 archive.flingtrainer.com 或 flingtrainer.com 下载
+  FLiNG: https://archive.flingtrainer.com/  (完整 A-Z 列表)
 
 本地缓存: APP_ROOT/config/trainer_cache.json  (24h 有效)
 """
@@ -22,7 +20,7 @@ import tempfile
 import time
 import zipfile
 from pathlib import Path
-from typing import Optional, Callable
+from typing import Optional, Callable, Dict, List
 from urllib.parse import urljoin, urlparse, unquote, urlencode
 
 import requests
@@ -34,6 +32,62 @@ from urllib3.exceptions import InsecureRequestWarning
 
 warnings.simplefilter("ignore", InsecureRequestWarning)
 
+# ── 代理配置 ──────────────────────────────────────────────────
+# 默认不使用代理，只有在直连失败时才使用
+_USE_PROXY_GLOBAL = False
+
+def _get_proxies() -> Optional[Dict[str, str]]:
+    """获取系统代理设置（仅在开启时返回）"""
+    if not _USE_PROXY_GLOBAL:
+        return None
+    
+    try:
+        proxies = {}
+        http_proxy = os.environ.get('HTTP_PROXY') or os.environ.get('http_proxy')
+        https_proxy = os.environ.get('HTTPS_PROXY') or os.environ.get('https_proxy')
+        socks_proxy = os.environ.get('SOCKS_PROXY') or os.environ.get('socks_proxy')
+        
+        if socks_proxy:
+            proxies['http'] = socks_proxy
+            proxies['https'] = socks_proxy
+        elif https_proxy:
+            proxies['https'] = https_proxy
+        elif http_proxy:
+            proxies['http'] = http_proxy
+            proxies['https'] = http_proxy
+        
+        return proxies if proxies else None
+    except Exception:
+        return None
+
+
+def _http_get_with_fallback(url: str, headers: Optional[Dict] = None, timeout: int = 15, **kwargs) -> requests.Response:
+    """发送 HTTP GET 请求，优先直连，失败后尝试代理"""
+    default_headers = {
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 Edg/129.0.0.0"
+    }
+    if headers:
+        default_headers.update(headers)
+    
+    # 先尝试直连
+    try:
+        resp = requests.get(url, headers=default_headers, timeout=timeout, **kwargs)
+        return resp
+    except Exception:
+        pass
+    
+    # 直连失败，尝试代理
+    proxies = _get_proxies()
+    if proxies:
+        try:
+            resp = requests.get(url, headers=default_headers, timeout=timeout, proxies=proxies, **kwargs)
+            return resp
+        except Exception:
+            pass
+    
+    # 仍然失败，抛出异常
+    return requests.get(url, headers=default_headers, timeout=timeout, **kwargs)
+
 
 def _create_scraper():
     """创建禁用SSL验证的cloudscraper（兼容check_hostname）"""
@@ -41,6 +95,17 @@ def _create_scraper():
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
     return cloudscraper.create_scraper(ssl_context=ctx)
+
+
+def _http_get(url: str, headers: Optional[Dict] = None, timeout: int = 15, **kwargs) -> requests.Response:
+    """发送 HTTP GET 请求"""
+    default_headers = {
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 Edg/129.0.0.0"
+    }
+    if headers:
+        default_headers.update(headers)
+    
+    return requests.get(url, headers=default_headers, timeout=timeout, **kwargs)
 
 
 def _setup_rarfile_path():
@@ -164,7 +229,7 @@ def _translate_keyword(keyword: str) -> str:
     
     try:
         # 获取 token 和 ig
-        response = requests.get(url, headers=header, timeout=10)
+        response = _http_get(url, headers=header, timeout=10)
         html = response.text
         soup = BeautifulSoup(html, "html.parser")
         dev_element = soup.find("div", id="tta_outGDCont")
@@ -204,6 +269,7 @@ def _translate_keyword(keyword: str) -> str:
         return target[0]['translations'][0]['text']
     except Exception:
         return keyword
+
 
 
 def _parse_game_name(raw: str) -> str:
@@ -367,30 +433,33 @@ def search_trainers(keyword: str) -> list:
     if not all_trainers:
         raise RuntimeError("无法获取修改器列表，请检查网络连接")
 
-    def _do_search(kw: str) -> list:
+    def _do_search(kw: str, trainers_list: list) -> list:
         results = []
-        kw_lower = kw.lower()
-        for t in all_trainers:
+        for t in trainers_list:
             if _fuzzy_match(kw, t['game_name']):
                 results.append(t)
         return results
 
     def _score(t, kw_lower):
         name = t['game_name'].lower()
-        if kw_lower == name:
+        if name == kw_lower:
             return 0
         if kw_lower in name:
             return 1
         return 2
 
-    # 第一次搜索：使用原始关键词
-    results = _do_search(keyword)
+    results = []
     
-    # 如果没找到结果，尝试翻译后搜索
-    if not results:
+    # 搜索 FLiNG 数据源
+    fling_results = _do_search(keyword, all_trainers)
+    
+    # 如果 FLiNG 没找到，尝试翻译后搜索
+    if not fling_results:
         translated = _translate_keyword(keyword)
         if translated != keyword:
-            results = _do_search(translated)
+            fling_results = _do_search(translated, all_trainers)
+    
+    results.extend(fling_results)
     
     # 按相关度排序（完全包含 > 模糊匹配）
     kw_lower = keyword.lower()
@@ -403,8 +472,7 @@ def search_trainers(keyword: str) -> list:
 def _get_direct_download_url(trainer: dict) -> Optional[str]:
     """
     获取直接下载链接。
-    - archive 来源：url 本身就是直接链接
-    - main 来源：需要进详情页找 <a> 下载链接
+    - archive/main 来源：需要进详情页找下载链接
     """
     url = trainer.get('url', '')
     source = trainer.get('source', '')
@@ -554,6 +622,7 @@ def _get_direct_download_url(trainer: dict) -> Optional[str]:
                 
         except Exception as e:
             print(f"[TrainerBackend] 获取详情页失败: {e}")
+    
     return None
 
 
@@ -586,63 +655,72 @@ def download_trainer(
 
     trainer_name = re.sub(r'[\\/:*?"<>|]', '_',
                           trainer.get('trainer_name') or trainer.get('game_name', 'Unknown'))
+    source = trainer.get('source', '')
 
     log("正在获取下载链接...")
     dl_url = _get_direct_download_url(trainer)
     if not dl_url:
         return {"success": False, "path": "", "message": "无法获取下载链接，请检查网络或稍后重试"}
-
+    
     log(f"正在下载: {trainer_name}")
     tmp_dir = Path(tempfile.gettempdir()) / "FluentInstallTrainer"
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        # 使用 cloudscraper 绕过 Cloudflare 等反爬虫保护
-        scraper = _create_scraper()
-        
-        resp = scraper.get(dl_url, stream=True, timeout=120)
-        resp.raise_for_status()
-        
-        # 检测是否是 HTML 页面（而非实际文件）
-        content_type = resp.headers.get('content-type', '').lower()
-        if 'text/html' in content_type or resp.text.strip().startswith('<!DOCTYPE') or resp.text.strip().startswith('<html'):
-            # 是 HTML 页面，尝试解析下载链接
-            log("下载的是页面，尝试解析下载链接...")
-            soup = BeautifulSoup(resp.text, 'html.parser')
+        # 根据来源决定使用哪种下载方式
+        # GCM 数据源使用签名 URL，直接下载不需要 cloudscraper
+        if source in ('xiaoxing', 'ct', 'gcm'):
+            # 签名 URL 通常是 S3 或类似的直接下载链接
+            log(f"使用签名URL下载: {dl_url[:80]}...")
+            resp = requests.get(dl_url, stream=True, timeout=120, 
+                               headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+            resp.raise_for_status()
+        else:
+            # archive/main 来源使用 cloudscraper（可能需要绕过 Cloudflare）
+            scraper = _create_scraper()
+            resp = scraper.get(dl_url, stream=True, timeout=120)
+            resp.raise_for_status()
             
-            # 尝试找下载链接
-            download_url = None
-            for a in soup.find_all('a', href=True):
-                href = a['href']
-                if href.endswith(('.zip', '.rar', '.7z')) or 'download' in href.lower():
-                    if href.startswith('http'):
-                        download_url = href
-                        break
-                    elif href.startswith('/'):
-                        download_url = urljoin(dl_url, href)
-                        break
-            
-            # 尝试找 meta refresh 或 JavaScript 重定向
-            if not download_url:
-                meta = soup.find('meta', attrs={'http-equiv': 'refresh'})
-                if meta and meta.get('content'):
-                    import re as re_module
-                    match = re_module.search(r'url=([^\s"]+)', meta['content'], re.I)
-                    if match:
-                        download_url = urljoin(dl_url, match.group(1))
-            
-            if download_url:
-                log(f"找到实际下载链接: {download_url}")
-                resp = scraper.get(download_url, stream=True, timeout=120)
-                resp.raise_for_status()
-            else:
-                return {"success": False, "path": "", "message": "无法解析下载链接，网站结构可能已更改"}
+            # 检测是否是 HTML 页面（而非实际文件）
+            content_type = resp.headers.get('content-type', '').lower()
+            if 'text/html' in content_type or resp.text.strip().startswith('<!DOCTYPE') or resp.text.strip().startswith('<html'):
+                # 是 HTML 页面，尝试解析下载链接
+                log("下载的是页面，尝试解析下载链接...")
+                soup = BeautifulSoup(resp.text, 'html.parser')
+                
+                # 尝试找下载链接
+                download_url = None
+                for a in soup.find_all('a', href=True):
+                    href = a['href']
+                    if href.endswith(('.zip', '.rar', '.7z')) or 'download' in href.lower():
+                        if href.startswith('http'):
+                            download_url = href
+                            break
+                        elif href.startswith('/'):
+                            download_url = urljoin(dl_url, href)
+                            break
+                
+                # 尝试找 meta refresh 或 JavaScript 重定向
+                if not download_url:
+                    meta = soup.find('meta', attrs={'http-equiv': 'refresh'})
+                    if meta and meta.get('content'):
+                        import re as re_module
+                        match = re_module.search(r'url=([^\s"]+)', meta['content'], re.I)
+                        if match:
+                            download_url = urljoin(dl_url, match.group(1))
+                
+                if download_url:
+                    log(f"找到实际下载链接: {download_url}")
+                    resp = scraper.get(download_url, stream=True, timeout=120)
+                    resp.raise_for_status()
+                else:
+                    return {"success": False, "path": "", "message": "无法解析下载链接，网站结构可能已更改"}
         
         fname = _find_fname(resp)
         tmp_file = tmp_dir / fname
         
-        # 如果文件没有扩展名但实际是 zip，修正扩展名
-        if not tmp_file.suffix.lower() in ('.zip', '.rar', '.7z', '.exe'):
+        # 如果文件没有扩展名但实际是压缩文件，修正扩展名
+        if not tmp_file.suffix.lower() in ('.zip', '.rar', '.7z', '.exe', '.ct', '.cetrainer'):
             # 检测实际文件类型
             first_bytes = resp.content[:4]
             if first_bytes == b'PK\x03\x04':  # ZIP 文件签名
@@ -679,18 +757,24 @@ def download_trainer(
         except:
             pass
     
+    # 解压到临时目录
+    extracted_dir = tmp_dir / "extracted"
+    if extracted_dir.exists():
+        shutil.rmtree(extracted_dir)
+    extracted_dir.mkdir(parents=True)
+    
     if ext == '.zip':
         log("正在解压...")
         try:
             try:
                 with zipfile.ZipFile(tmp_file, 'r') as zf:
-                    zf.extractall(dest_dir)
+                    zf.extractall(extracted_dir)
             except zipfile.BadZipFile:
                 z7, tool = _find_unrar_tool()
                 if z7:
                     log(f"正在解压 ({tool})...")
                     subprocess.run(
-                        [z7, 'x', '-y', '-o' + str(dest_dir), str(tmp_file)],
+                        [z7, 'x', '-y', '-o' + str(extracted_dir), str(tmp_file)],
                         check=True, creationflags=subprocess.CREATE_NO_WINDOW,
                         timeout=60
                     )
@@ -706,7 +790,7 @@ def download_trainer(
             log(f"正在解压 RAR ({tool})...")
             try:
                 # 使用 shell=True 确保路径特殊字符被正确处理
-                cmd = f'"{z7}" x -y "{tmp_file}" -o"{dest_dir}"'
+                cmd = f'"{z7}" x -y "{tmp_file}" -o"{extracted_dir}"'
                 result = subprocess.run(
                     cmd,
                     shell=True,
@@ -735,11 +819,11 @@ def download_trainer(
                     
                     log("正在解压 RAR (rarfile)...")
                     with rarfile.RarFile(tmp_file, 'r') as rf:
-                        rf.extractall(dest_dir)
+                        rf.extractall(extracted_dir)
                     tmp_file.unlink(missing_ok=True)
                 except ImportError:
-                    dst = dest_dir / tmp_file.name
-                    shutil.move(str(tmp_file), str(dst))
+                    # 移动原始文件而不是解压
+                    shutil.move(str(tmp_file), str(extracted_dir / tmp_file.name))
                     return {"success": False, "path": "", "message": f"解压失败，请安装 7-Zip: {fallback_err}"}
                 except Exception as e:
                     return {"success": False, "path": "", "message": f"解压失败: {e}"}
@@ -749,11 +833,10 @@ def download_trainer(
                 import rarfile
                 log("正在解压 RAR (rarfile)...")
                 with rarfile.RarFile(tmp_file, 'r') as rf:
-                    rf.extractall(dest_dir)
+                    rf.extractall(extracted_dir)
                 tmp_file.unlink(missing_ok=True)
             except ImportError:
-                dst = dest_dir / tmp_file.name
-                shutil.move(str(tmp_file), str(dst))
+                shutil.move(str(tmp_file), str(extracted_dir / tmp_file.name))
                 return {"success": False, "path": "", "message": "请安装 7-Zip 来解压 RAR 文件"}
             except Exception as e:
                 return {"success": False, "path": "", "message": f"解压失败: {e}"}
@@ -763,7 +846,7 @@ def download_trainer(
             log(f"正在解压 ({tool})...")
             try:
                 subprocess.run(
-                    [tool_path, 'x', '-y', str(tmp_file), f'-o{dest_dir}'],
+                    [tool_path, 'x', '-y', str(tmp_file), f'-o{extracted_dir}'],
                     check=True, creationflags=subprocess.CREATE_NO_WINDOW,
                     timeout=60
                 )
@@ -771,15 +854,75 @@ def download_trainer(
             except Exception as e:
                 return {"success": False, "path": "", "message": f"解压失败: {e}"}
         else:
-            dst = dest_dir / tmp_file.name
-            shutil.move(str(tmp_file), str(dst))
+            shutil.move(str(tmp_file), str(extracted_dir / tmp_file.name))
             return {"success": False, "path": "", "message": "请安装 7-Zip 来解压 7z 文件"}
     else:
-        dst = dest_dir / tmp_file.name
-        if dst.exists():
-            dst.chmod(stat.S_IWRITE)
-            dst.unlink()
-        shutil.move(str(tmp_file), str(dst))
+        # 非压缩文件（如 .ct, .exe），直接移动
+        shutil.move(str(tmp_file), str(extracted_dir / tmp_file.name))
+    
+    # 处理解压后的文件结构（参考 GCM 的 handle_multi_version_archive 逻辑）
+    temp_contents = os.listdir(extracted_dir)
+    has_executable_in_root = any(
+        file.lower().endswith((".exe", ".ct", ".cetrainer", ".png"))
+        for file in temp_contents
+        if os.path.isfile(os.path.join(extracted_dir, file))
+    )
+    folders = [item for item in temp_contents if os.path.isdir(os.path.join(extracted_dir, item)) and item != "gcm-instructions"]
+    
+    # 检查是否有 gcm-instructions 文件夹（单文件训练器的说明文件夹）
+    instructions_folder = extracted_dir / "gcm-instructions"
+    if instructions_folder.exists() and instructions_folder.is_dir():
+        # 移动 gcm-instructions 到目标目录
+        instructions_dest = dest_dir / "gcm-instructions"
+        if instructions_dest.exists():
+            shutil.rmtree(instructions_dest)
+        shutil.move(str(instructions_folder), str(instructions_dest))
+        log("检测到说明文件夹，将一起移动")
+    
+    # 处理多版本文件夹
+    if not has_executable_in_root and len(folders) > 0:
+        # 解压后是多个版本文件夹，每个版本移动到单独的目录
+        for folder_name in folders:
+            source_path = extracted_dir / folder_name
+            safe_folder_name = re.sub(r'[\\/:*?"<>|]', '_', folder_name.strip())
+            version_dest = dest_dir.parent / f"{trainer_name} {safe_folder_name}"
+            version_dest.mkdir(parents=True, exist_ok=True)
+            
+            # 移动文件夹内容
+            for item in os.listdir(source_path):
+                src = source_path / item
+                dst = version_dest / item
+                if dst.exists():
+                    if dst.is_file():
+                        dst.chmod(stat.S_IWRITE)
+                        dst.unlink()
+                shutil.move(str(src), str(dst))
+        
+        # 删除空的源文件夹
+        shutil.rmtree(extracted_dir)
+        
+        # 如果 dest_dir 为空，删除它
+        if dest_dir.exists() and not any(dest_dir.iterdir()):
+            dest_dir.rmdir()
+        
+        log(f"✅ 下载完成（多版本）: {dest_dir.parent / trainer_name}")
+        return {"success": True, "path": str(dest_dir.parent / trainer_name), "message": "下载成功"}
+    else:
+        # 单个训练器，直接移动解压内容到目标目录
+        for item in os.listdir(extracted_dir):
+            src = extracted_dir / item
+            dst = dest_dir / item
+            if dst.exists():
+                if dst.is_dir():
+                    shutil.rmtree(dst)
+                else:
+                    dst.chmod(stat.S_IWRITE)
+                    dst.unlink()
+            shutil.move(str(src), str(dst))
+        
+        # 删除临时解压目录
+        if extracted_dir.exists():
+            shutil.rmtree(extracted_dir)
 
     # 写元信息
     info = {
