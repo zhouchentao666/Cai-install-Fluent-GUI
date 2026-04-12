@@ -1,5 +1,11 @@
 # Fluent Install
 
+文档：https://zhouchentao666.github.io/Fluent-Install/
+
+英文文档：https://zhouchentao666.github.io/Fluent-Install/en/
+
+繁中文档：https://zhouchentao666.github.io/Fluent-Install/zh-tw/
+
 [English Version](./README_EN.md)
 
 一个基于 Fluent Design 的现代化steamtools入库工具，提供美观的用户界面和便捷的操作体验。支持多语言、主题定制、自定义仓库等高级功能。
