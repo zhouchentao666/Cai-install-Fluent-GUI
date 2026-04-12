@@ -11,7 +11,7 @@ hero:
   actions:
     - theme: brand
       text: Quick Start
-      link: /en/guide/getting-started
+      link: /en/guide/prepare
     - theme: alt
       text: FAQ
       link: /en/faq/
