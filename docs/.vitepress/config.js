@@ -41,6 +41,7 @@ export default defineConfig({
             text: '社区与交流',
             items: [
               { text: 'GitHub Issue', link: 'https://github.com/zhouchentao666/Fluent-Install/issues' },
+              { text: 'QQ频道', link: 'https://pd.qq.com/s/fg1vd0v17' },
               { text: 'Q群', link: 'https://qm.qq.com/q/gtTLap5Jw4' },
               { text: 'TG群', link: 'https://t.me/+vTrqXKpRJE9kNmVl' }
             ]
@@ -110,6 +111,7 @@ export default defineConfig({
             text: '社群與交流',
             items: [
               { text: 'GitHub Issue', link: 'https://github.com/zhouchentao666/Fluent-Install/issues' },
+              { text: 'QQ頻道', link: 'https://pd.qq.com/s/fg1vd0v17' },
               { text: 'QQ群', link: 'https://qm.qq.com/q/gtTLap5Jw4' },
               { text: 'TG群', link: 'https://t.me/+vTrqXKpRJE9kNmVl' }
             ]
@@ -179,6 +181,7 @@ export default defineConfig({
             text: 'Community',
             items: [
               { text: 'GitHub Issue', link: 'https://github.com/zhouchentao666/Fluent-Install/issues' },
+              { text: 'QQ Channel', link: 'https://pd.qq.com/s/fg1vd0v17' },
               { text: 'QQ Group', link: 'https://qm.qq.com/q/gtTLap5Jw4' },
               { text: 'Telegram', link: 'https://t.me/+vTrqXKpRJE9kNmVl' }
             ]
