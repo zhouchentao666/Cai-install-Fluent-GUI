@@ -22,13 +22,19 @@ Please check the following:
 
 ---
 
-## 2: Software shows addition failed
+## 2: Cannot Open Steam
+
+**Solution**: In SteamTools, set Steam to **Online Mode**, then start Steam
+
+---
+
+## 3: Software shows addition failed
 
 Please check the error message for specific analysis.
 
 ---
 
-## 3: Common Errors and Solutions
+## 4: Common Errors and Solutions
 
 ### No Internet Connection
 
@@ -36,11 +42,13 @@ Please check the error message for specific analysis.
 - lua/manifest/error
 - Poor network, try multiple times
 - Clear cache
+- **Uncheck DLCs that have no size**
 
 ### Content Still Encrypted
 
 - **Cause**: lua file expired
 - **Solution**: Update lua file
+- **Uncheck DLCs that have no size**
 
 ### Content Not Available
 
