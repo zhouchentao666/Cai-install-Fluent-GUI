@@ -344,7 +344,7 @@ Fluent-Install/
 - [PyQt6-Fluent-Widgets](https://github.com/zhiyiYo/PyQt-Fluent-Widgets) - 精美的 Fluent Design 组件库
 - [PyQt6](https://www.riverbankcomputing.com/software/pyqt/) - 强大的跨平台 GUI 框架
 - [Python 社区](https://www.python.org/) - 提供优秀的编程语言
-- [Cai-install-Wub-Ui]([pvzcxw/Cai-install-Web-GUI](https://github.com/pvzcxw/Cai-install-Web-GUI)) - 提供后端
+- [Cai-install-Wub-Ui]([pvzcxw/Cai-install-Web-GUI](https://github.com/pvzcxw/Cai-install-Web-GUI)- 提供后端
 - 所有贡献者和用户 - 让项目变得更好
 
 ⭐ 如果这个项目对您有帮助，请给我们一个 Star！
