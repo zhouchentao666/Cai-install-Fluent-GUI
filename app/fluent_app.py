@@ -6,13 +6,15 @@ import sys
 import os
 import asyncio
 import logging
+import json
 from pathlib import Path
 from typing import Optional
-from PyQt6.QtCore import Qt, QSize, pyqtSignal, QThread, pyqtSlot, QUrl, QLocale, QTranslator, QObject, QTimer
-from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel
+from PyQt6.QtCore import Qt, QSize, pyqtSignal, QThread, pyqtSlot, QUrl, QLocale, QTranslator, QObject, QTimer, QPoint, QRect
+from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QStackedWidget, QDialog
 from PyQt6.QtGui import QIntValidator
 from PyQt6.QtGui import QIcon, QPixmap, QFont, QDesktopServices
 from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
+from PyQt6 import sip
 from qfluentwidgets import (
     FluentIcon, NavigationItemPosition, MessageBox,
     setTheme, Theme, setThemeColor, isDarkTheme,
@@ -24,7 +26,7 @@ from qfluentwidgets import (
     PrimaryPushButton, CheckBox, GroupHeaderCardWidget, InfoBarIcon,
     SpinBox, HyperlinkButton, MessageBoxBase, TitleLabel,
     RoundMenu, Action, TextEdit, SingleDirectionScrollArea, ProgressBar, ToolTipFilter, ToolTipPosition,
-    Slider
+    Slider, SegmentedWidget, SmoothMode, AvatarWidget
 )
 
 # 项目根目录（兼容直接运行和 PyInstaller 打包）
@@ -46,6 +48,105 @@ _rec_cache: list = []
 _rec_cache_ts: float = 0.0
 _REC_CACHE_TTL = 3600  # 缓存有效期 1 小时
 
+# 模块级封面图片缓存（进程内共享）
+_cover_cache: dict = {}  # appid -> pixmap_data
+_cover_cache_ts: dict = {}  # appid -> timestamp
+_COVER_CACHE_TTL = 86400  # 封面缓存有效期 24 小时
+_COVER_CACHE_MAX_SIZE = 500  # 最大缓存数量
+
+# 磁盘缓存目录
+_COVER_CACHE_DIR = APP_ROOT / "config" / "covers"
+try:
+    _COVER_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+except Exception:
+    # 如果无法创建缓存目录（权限问题等），回退到临时目录
+    import tempfile
+    _COVER_CACHE_DIR = Path(tempfile.gettempdir()) / "FluentInstall" / "covers"
+    try:
+        _COVER_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        # 如果还是无法创建，禁用磁盘缓存
+        _COVER_CACHE_DIR = None
+
+# 模块级游戏名称缓存（进程内共享）
+_name_cache: dict = {}  # appid -> game_name
+_name_cache_ts: dict = {}  # appid -> timestamp
+_NAME_CACHE_TTL = 86400  # 名称缓存有效期 24 小时
+_NAME_CACHE_MAX_SIZE = 1000  # 最大缓存数量
+
+def _get_cached_name(appid: str) -> str:
+    """获取缓存的游戏名称"""
+    if appid in _name_cache:
+        ts = _name_cache_ts.get(appid, 0)
+        if (_time.time() - ts) < _NAME_CACHE_TTL:
+            return _name_cache[appid]
+        else:
+            del _name_cache[appid]
+            del _name_cache_ts[appid]
+    return ""
+
+def _cache_name(appid: str, name: str):
+    """缓存游戏名称"""
+    if len(_name_cache) >= _NAME_CACHE_MAX_SIZE:
+        oldest_appid = min(_name_cache_ts, key=_name_cache_ts.get)
+        del _name_cache[oldest_appid]
+        del _name_cache_ts[oldest_appid]
+    
+    _name_cache[appid] = name
+    _name_cache_ts[appid] = _time.time()
+
+def _get_cached_cover(appid: str):
+    """获取缓存的封面图片（先检查内存缓存，再检查磁盘缓存）"""
+    # 先检查内存缓存
+    if appid in _cover_cache:
+        ts = _cover_cache_ts.get(appid, 0)
+        if (_time.time() - ts) < _COVER_CACHE_TTL:
+            return _cover_cache[appid]
+        else:
+            # 缓存过期，删除
+            del _cover_cache[appid]
+            del _cover_cache_ts[appid]
+    
+    # 检查磁盘缓存（如果磁盘缓存可用）
+    if _COVER_CACHE_DIR is not None:
+        cache_file = _COVER_CACHE_DIR / f"{appid}.jpg"
+        if cache_file.exists():
+            # 检查文件修改时间
+            file_mtime = cache_file.stat().st_mtime
+            if (_time.time() - file_mtime) < _COVER_CACHE_TTL:
+                try:
+                    with open(cache_file, 'rb') as f:
+                        data = f.read()
+                    # 同时加载到内存缓存
+                    _cover_cache[appid] = data
+                    _cover_cache_ts[appid] = _time.time()
+                    return data
+                except Exception:
+                    pass
+    
+    return None
+
+def _cache_cover(appid: str, data: bytes):
+    """缓存封面图片（同时写入内存和磁盘）"""
+    # 写入内存缓存
+    if len(_cover_cache) >= _COVER_CACHE_MAX_SIZE:
+        # 找到最早的缓存项
+        oldest_appid = min(_cover_cache_ts, key=_cover_cache_ts.get)
+        del _cover_cache[oldest_appid]
+        del _cover_cache_ts[oldest_appid]
+    
+    _cover_cache[appid] = data
+    _cover_cache_ts[appid] = _time.time()
+    
+    # 写入磁盘缓存（如果磁盘缓存可用）
+    if _COVER_CACHE_DIR is not None:
+        try:
+            cache_file = _COVER_CACHE_DIR / f"{appid}.jpg"
+            with open(cache_file, 'wb') as f:
+                f.write(data)
+        except Exception:
+            pass
+
 
 # 语言配置
 LANGUAGES = {
@@ -57,34 +158,10 @@ LANGUAGES = {
         "name": "English",
         "locale": QLocale(QLocale.Language.English, QLocale.Country.UnitedStates)
     },
-    "fr_FR": {
-        "name": "Français",
-        "locale": QLocale(QLocale.Language.French, QLocale.Country.France)
-    },
-    "ru_RU": {
-        "name": "Русский",
-        "locale": QLocale(QLocale.Language.Russian, QLocale.Country.Russia)
-    },
-    "de_DE": {
-        "name": "Deutsch",
-        "locale": QLocale(QLocale.Language.German, QLocale.Country.Germany)
-    },
-    "ja_JP": {
-        "name": "日本語",
-        "locale": QLocale(QLocale.Language.Japanese, QLocale.Country.Japan)
-    },
     "zh_TW": {
         "name": "繁體中文",
         "locale": QLocale(QLocale.Language.Chinese, QLocale.Country.Taiwan)
     },
-    "ko_KR": {
-        "name": "한국어",
-        "locale": QLocale(QLocale.Language.Korean, QLocale.Country.SouthKorea)
-    },
-    "es_ES": {
-        "name": "Español",
-        "locale": QLocale(QLocale.Language.Spanish, QLocale.Country.Spain)
-    }
 }
 
 class QtLogHandler(QObject, logging.Handler):
@@ -151,6 +228,7 @@ TEXTS = {
         "default_page_home": "主页",
         "default_page_search": "搜索入库",
         "restart_steam": "重启 Steam",
+        "switch_steam_account": "Steam 换号",
         "installed_games": "已入库的游戏",
         "search_placeholder": "搜索游戏名称或 AppID",
         "loading": "加载中...",
@@ -168,6 +246,9 @@ TEXTS = {
         "add_all_dlc": "添加所有 DLC",
         "patch_depot_key": "修补 Depot Key",
         "patch_manifest": "修补 Manifest",
+        "download_lua_only": "仅下载 Lua",
+        "download_dlc_manifests": "下载 DLC 清单",
+        "download_all_manifests": "下载所有清单 (Lua + DLC)",
         "manifest_source": "清单源:",
         "view_mode": "视图",
         "sort_mode": "排序",
@@ -195,6 +276,53 @@ TEXTS = {
         "theme_color_changed": "主题颜色已更改为 {0}\n\n是否立即重启应用以应用更改？",
         "restart_steam_confirm": "重启 Steam",
         "restart_steam_message": "确定要重启 Steam 吗？\n\n这将关闭当前运行的 Steam 并重新启动。",
+        "restart_steam_select_account": "选择要切换的账号（可选）：",
+        "restart_steam_no_switch": "不切换账号，仅重启",
+        "switch_steam_account": "Steam 换号",
+        "switch_account": "切换账号",
+        "switch_account_title": "切换 Steam 账号",
+        "switch_account_message": "请输入要切换到的 Steam 账号（用户名 或 用户名 密码）：",
+        "switch_account_placeholder": "用户名 或 用户名 密码",
+        "switching_account": "正在切换账号",
+        "switching_account_message": "正在切换 Steam 账号，请稍候...",
+        "switch_account_success": "切换账号成功",
+        "switch_account_success_message": "Steam 账号已切换",
+        "switch_account_failed": "切换账号失败",
+        "switch_account_failed_message": "切换 Steam 账号失败，请检查账号信息",
+        "switch_account_error_message": "切换账号时出错: {0}",
+        "switch_account_select_message": "请选择要切换到的 Steam 账号：",
+        "no_accounts_title": "未找到账号",
+        "no_accounts_message": "未能从 loginusers.vdf 读取到已保存的 Steam 账号",
+        "load_accounts_failed": "加载账号失败",
+        "input_required": "输入不能为空",
+        "account_required": "请输入 Steam 账号",
+        "cancel": "取消",
+        "confirm": "确定",
+        "save": "保存",
+        "steam_account_nav": "Steam 账号",
+        "steam_account_manager": "Steam 账号管理",
+        "refresh_accounts": "刷新账号列表",
+        "toggle_view_mode": "切换视图模式",
+        "no_note": "点击编辑备注",
+        "current_account": "当前",
+        "switch_to_this_account": "切换到该账号",
+        "edit_note": "编辑备注",
+        "edit_note_title": "编辑账号备注",
+        "edit_note_message": "请输入该账号的备注信息：",
+        "note_placeholder": "输入备注...",
+        "note_saved": "备注已保存",
+        "note_saved_message": "账号备注已成功保存",
+        "switch_offline": "离线启动",
+        "offline_mode": "离线模式",
+        "online_mode": "在线模式",
+        "more_actions": "更多操作",
+        "delete_account": "删除账号",
+        "confirm_delete_account": "确认删除账号",
+        "delete_account_message": "确定要删除账号 {} 吗？\n\n这将从 Steam 中移除该账号的登录信息。",
+        "delete_account_success": "删除成功",
+        "delete_account_success_message": "账号已成功删除",
+        "delete_account_failed": "删除失败",
+        "delete_account_failed_message": "删除账号失败，请检查权限",
         "total_games": "共 {0} 个游戏 | SteamTools: {1} | GreenLuma: {2}",
         "load_failed": "加载失败: {0}",
         "reset_settings": "重置设置",
@@ -220,6 +348,7 @@ TEXTS = {
         "auto_detect": "自动检测",
         "force_steamtools": "强制 SteamTools",
         "force_greenluma": "强制 GreenLuma",
+        "force_opensteamtools": "强制 OpenSteamTools",
         "force_unlocker_hint": "强制使用指定的解锁工具",
         "download_timeout": "入库超时时间",
         "download_timeout_hint": "下载清单的超时时间（秒），网络较慢时可适当增大",
@@ -230,6 +359,8 @@ TEXTS = {
         "window_effect_hint": "选择窗口背景特效",
         "effect_none": "无特效",
         "effect_mica": "云母 (Win11)",
+        "smooth_scroll": "平滑滚动",
+        "smooth_scroll_hint": "启用页面平滑滚动效果（关闭可减少卡顿）",
         "light_theme": "浅色",
         "dark_theme": "深色",
         "follow_system": "跟随系统",
@@ -242,13 +373,16 @@ TEXTS = {
         "tip_source_fail": "提示: 如果某个源失败，请尝试其他源",
         "auto_select": "自动选择",
         "auto_search_github": "自动搜索GitHub",
-        "sac-other": "sac分流",
+        "sac-other": "sac分流 [废弃]",
         "walftech": "Walftech",
         "MHub": "MHub",
-        "steamautocracks_v2": "SteamAutoCracks V2 (仅密钥)",
-        "sudama": "Sudama库 (仅密钥)",
+        "steamautocracks_v2": "SteamAutoCracks V2 (仅密钥) [废弃]",
+        "sudama": "Sudama库 (仅密钥) [推荐]",
         "buqiuren": "清单不求人库 (仅清单)",
+        "gmrc": "GMRC (仅清单)",
         "github_auiowu": "GitHub (Auiowu)",
+        "github_mau": "GitHub (MAU)",
+        "github_mau": "GitHub (MAU)",
         "check_update": "检查更新",
         "checking": "检查中...",
         "update_available": "发现新版本",
@@ -259,6 +393,42 @@ TEXTS = {
         "already_latest": "已是最新版本",
         "already_latest_content": "当前已是最新版本，无需更新。",
         "check_update_failed": "检查更新失败",
+                "drm_page_title": "D加密授权器",
+        "drm_step1": "步骤 1：获取授权文件",
+        "drm_cw_file": "CW 文件",
+        "drm_cw_file_hint": "选择本地 .cw 授权文件并解密",
+        "drm_cw_placeholder": "选择 .cw 授权文件",
+        "drm_browse": "浏览",
+        "drm_decrypt": "解密",
+        "drm_auth_code": "授权码",
+        "drm_auth_code_hint": "通过授权码在线下载 CW 文件",
+        "drm_auth_code_placeholder": "输入授权码",
+        "drm_download_decrypt": "下载并解密",
+        "drm_online_auth": "在线获取授权",
+        "drm_online_auth_hint": "访问外部授权网站",
+        "drm_extract_title": "获取 CW 文件（本地提取）",
+        "drm_extract_hint": "需要已登录 Steam 且拥有该游戏",
+        "drm_extract_placeholder": "输入游戏 AppID（当前账号必须拥有该游戏）",
+        "drm_gen_authcode": "生成授权码",
+        "drm_extract_cw": "本地提取 CW",
+        "drm_info_title": "授权信息",
+        "drm_valid_from": "生效时间",
+        "drm_valid_to": "失效时间",
+        "drm_step2": "步骤 2：GL 模式授权（SteamTools）",
+        "drm_gl_hint": "将授权 ticket 写入 SteamTools 目录",
+        "drm_gl_btn": "开始授权 (GL/SteamTools)",
+        "drm_log": "日志",
+        "drm_nav": "D加密",
+        "drm_tip_select_cw": "请先选择 CW 文件",
+        "drm_tip_enter_code": "请输入授权码",
+        "drm_tip_decrypt_first": "请先解密 CW 文件",
+        "drm_tip_valid_appid": "请输入有效的 AppID",
+        "drm_missing_dep": "缺少依赖",
+        "drm_missing_dep_hint": "请安装 pycryptodome: pip install pycryptodome",
+        "drm_decrypt_failed": "解密失败",
+        "drm_download_failed": "下载失败",
+        "drm_auth_success": "授权成功",
+        "drm_auth_failed": "授权失败","restart_steam_title": "重启 Steam",
         "restart_steam_confirm_message": "确定要重启 Steam 吗？\n\n这将关闭当前运行的 Steam 并重新启动。",
         
         # 缺失的翻译键
@@ -309,12 +479,76 @@ TEXTS = {
         "st_fixed_manifest_always": "始终",
         "st_fixed_manifest_never": "从不",
         "st_fixed_manifest_ask": "询问",
+        "patch_manifest_mode": "修补 Manifest",
+        "patch_manifest_mode_hint": "入库后自动补全缺失的清单文件",
+        "patch_manifest_always": "始终",
+        "patch_manifest_never": "从不",
+        "patch_manifest_ask": "询问",
+        "patch_manifest_ask_hint": "是否补全缺失的清单文件？",
         "dlc_timeout": "DLC 联网超时时间",
         "dlc_timeout_hint": "获取DLC列表超时时间，网络较差时可适当调大（秒）",
         "show_progress_bar": "显示进度条",
         "show_progress_bar_hint": "在搜索和入库过程中显示进度条，提供更好的用户体验",
         "name_not_found": "名称未找到",
         "fetch_failed": "获取失败",
+        
+        # 内核检测相关
+        "no_kernel_title": "未检测到解锁内核",
+        "no_kernel_msg": "您还没有安装任何解锁内核，本软件目前支持以下三种内核，请您选择：",
+        "auto_download": "自动下载",
+        "manual_download": "手动下载",
+        "force_kernel_select": "如果您已安装但未正确识别，可在此强制选择内核：",
+        "force_apply": "强制使用",
+        "ost_desc": "OpenSteamTools (推荐)",
+        "st_desc": "SteamTools",
+        "gl_desc": "GreenLuma (不推荐)",
+        
+        # 版本模式设置
+        "st_settings": "版本模式设置",
+        "st_settings_hint": "控制文件的版本管理模式（自动更新/固定版本）",
+        "st_fixed_enable": "固定版本",
+        "st_fixed_tooltip": "新添加的文件默认使用固定版本模式",
+        "manifest_patch_source": "Manifest 修补库",
+        "manifest_patch_source_hint": "用于固定版本模式缺失清单时的自动补全源",
+        "patch_source_default": "默认 (Steam.run/GitHub)",
+        "patch_source_gmrc": "GMRC",
+        "patch_source_buqiuren": "清单不求人",
+        
+        # 通用
+        "success": "成功",
+        "failed": "失败",
+        "install_success": "安装成功，请重启软件！",
+        "download_failed": "下载失败",
+        "launch_failed": "启动失败",
+        "save_failed": "保存失败",
+        
+        "github_repos": "GitHub 仓库",
+        "github_repos_desc": "添加自定义 GitHub 清单仓库",
+        "zip_repos": "ZIP 清单库",
+        "zip_repos_desc": "添加自定义 ZIP 清单下载地址",
+        "add": "添加",
+        "add_github_repo": "添加 GitHub 仓库",
+        "add_zip_repo": "添加 ZIP 仓库",
+        "repo_name": "显示名称",
+        "repo_path": "仓库路径",
+        "repo_url": "下载 URL",
+        "repo_name_placeholder": "例如：我的自定义仓库",
+        "github_repo_placeholder": "例如：username/repository",
+        "zip_url_placeholder": "例如：https://example.com/download/{app_id}.zip",
+        "github_repo_hint": "格式：用户名/仓库名，例如：Auiowu/ManifestAutoUpdate",
+        "zip_url_hint": "URL 必须包含 {app_id} 占位符，程序会自动替换为实际的 AppID",
+        "no_repos": "暂无配置的仓库",
+        "repo_exists": "仓库已存在",
+        "repo_already_added": "该仓库已被添加",
+        "github_repo_added": "GitHub 仓库添加成功",
+        "zip_repo_added": "ZIP 清单库添加成功",
+        "input_incomplete": "输入不完整",
+        "please_fill_all_fields": "请填写所有必填字段",
+        "invalid_format": "格式不正确",
+        "github_format_hint": "GitHub 仓库格式应为：用户名/仓库名",
+        "zip_format_hint": "URL 必须包含 {app_id} 占位符",
+        "save": "保存",
+        "cancel": "取消",
     },
     "en_US": {
         "app_title": "FluentInstall",
@@ -343,6 +577,9 @@ TEXTS = {
         "add_all_dlc": "Add All DLC",
         "patch_depot_key": "Patch Depot Key",
         "patch_manifest": "Patch Manifest",
+        "download_lua_only": "Download Lua Only",
+        "download_dlc_manifests": "Download DLC Manifests",
+        "download_all_manifests": "Download All Manifests (Lua + DLC)",
         "manifest_source": "Manifest Source:",
         "add_game": "Add Game",
         "steam_path": "Steam Path",
@@ -360,6 +597,53 @@ TEXTS = {
         "theme_color_changed": "Theme color changed to {0}\n\nRestart the application now to apply changes?",
         "restart_steam_confirm": "Restart Steam",
         "restart_steam_message": "Are you sure you want to restart Steam?\n\nThis will close the currently running Steam and restart it.",
+        "restart_steam_select_account": "Select account to switch (optional):",
+        "restart_steam_no_switch": "Don't switch, restart only",
+        "switch_steam_account": "Switch Steam Account",
+        "switch_account": "Switch Account",
+        "switch_account_title": "Switch Steam Account",
+        "switch_account_message": "Please enter the Steam account to switch to (username or username password):",
+        "switch_account_placeholder": "username or username password",
+        "switching_account": "Switching Account",
+        "switching_account_message": "Switching Steam account, please wait...",
+        "switch_account_success": "Account Switched",
+        "switch_account_success_message": "Steam account has been switched",
+        "switch_account_failed": "Switch Failed",
+        "switch_account_failed_message": "Failed to switch Steam account, please check account info",
+        "switch_account_error_message": "Error switching account: {0}",
+        "switch_account_select_message": "Please select the Steam account to switch to:",
+        "no_accounts_title": "No Accounts Found",
+        "no_accounts_message": "No saved Steam accounts found in loginusers.vdf",
+        "load_accounts_failed": "Failed to load accounts",
+        "input_required": "Input Required",
+        "account_required": "Please enter Steam account",
+        "cancel": "Cancel",
+        "confirm": "Confirm",
+        "save": "Save",
+        "steam_account_nav": "Steam Accounts",
+        "steam_account_manager": "Steam Account Manager",
+        "refresh_accounts": "Refresh Account List",
+        "toggle_view_mode": "Toggle View Mode",
+        "no_note": "Click to add note",
+        "current_account": "Current",
+        "switch_to_this_account": "Switch to this account",
+        "edit_note": "Edit Note",
+        "edit_note_title": "Edit Account Note",
+        "edit_note_message": "Please enter a note for this account:",
+        "note_placeholder": "Enter note...",
+        "note_saved": "Note Saved",
+        "note_saved_message": "Account note has been saved successfully",
+        "switch_offline": "Launch Offline",
+        "offline_mode": "Offline Mode",
+        "online_mode": "Online Mode",
+        "more_actions": "More Actions",
+        "delete_account": "Delete Account",
+        "confirm_delete_account": "Confirm Delete Account",
+        "delete_account_message": "Are you sure you want to delete account {}?\n\nThis will remove the account's login information from Steam.",
+        "delete_account_success": "Delete Successful",
+        "delete_account_success_message": "Account has been deleted successfully",
+        "delete_account_failed": "Delete Failed",
+        "delete_account_failed_message": "Failed to delete account, please check permissions",
         "total_games": "Total: {0} games | SteamTools: {1} | GreenLuma: {2}",
         "load_failed": "Load failed: {0}",
         "reset_settings": "Reset Settings",
@@ -383,6 +667,7 @@ TEXTS = {
         "auto_detect": "Auto Detect",
         "force_steamtools": "Force SteamTools",
         "force_greenluma": "Force GreenLuma",
+        "force_opensteamtools": "Force OpenSteamTools",
         "force_unlocker_hint": "Force use of specified unlocker",
         "download_timeout": "Download Timeout",
         "download_timeout_hint": "Timeout in seconds for manifest downloads, increase if network is slow",
@@ -395,6 +680,8 @@ TEXTS = {
         "effect_mica": "Mica (Win11)",
         "effect_acrylic": "Acrylic (Win10+)",
         "effect_aero": "Aero Blur",
+        "smooth_scroll": "Smooth Scroll",
+        "smooth_scroll_hint": "Enable smooth scrolling effect (disable to reduce lag)",
         "default_blue": "Default Blue (#0078d4)",
         "purple": "Purple (#9b4dca)",
         "green": "Green (#10893e)",
@@ -406,10 +693,12 @@ TEXTS = {
         "auto_search_github": "Auto Search GitHub",
         "swa_v2": "SWA V2",
         "walftech": "Walftech",
-        "steamautocracks_v2": "SteamAutoCracks V2 (Keys Only)",
-        "sudama": "Sudama Library (Keys Only)",
+        "steamautocracks_v2": "SteamAutoCracks V2 (Keys Only) [Deprecated]",
+        "sudama": "Sudama Library (Keys Only) [Recommended]",
         "buqiuren": "Manifest Helper Library (Manifest Only)",
+        "gmrc": "GMRC (Manifest Only)",
         "github_auiowu": "GitHub (Auiowu)",
+        "github_mau": "GitHub (MAU)",
         "check_update": "Check Update",
         "checking": "Checking...",
         "update_available": "New Version Available",
@@ -420,6 +709,42 @@ TEXTS = {
         "already_latest": "Already Up to Date",
         "already_latest_content": "You are running the latest version.",
         "check_update_failed": "Check Update Failed",
+                "drm_page_title": "D-Encryption Authorizer",
+        "drm_step1": "Step 1: Get Authorization File",
+        "drm_cw_file": "CW File",
+        "drm_cw_file_hint": "Select local .cw file and decrypt",
+        "drm_cw_placeholder": "Select .cw authorization file",
+        "drm_browse": "Browse",
+        "drm_decrypt": "Decrypt",
+        "drm_auth_code": "Auth Code",
+        "drm_auth_code_hint": "Download CW file online via auth code",
+        "drm_auth_code_placeholder": "Enter auth code",
+        "drm_download_decrypt": "Download & Decrypt",
+        "drm_online_auth": "Get Auth Online",
+        "drm_online_auth_hint": "Visit external authorization websites",
+        "drm_extract_title": "Get CW File (Local Extract)",
+        "drm_extract_hint": "Requires Steam login and game ownership",
+        "drm_extract_placeholder": "Enter game AppID (must own the game)",
+        "drm_gen_authcode": "Generate Auth Code",
+        "drm_extract_cw": "Extract CW Locally",
+        "drm_info_title": "Authorization Info",
+        "drm_valid_from": "Valid From",
+        "drm_valid_to": "Valid To",
+        "drm_step2": "Step 2: GL Mode Authorization (SteamTools)",
+        "drm_gl_hint": "Write authorization ticket to SteamTools directory",
+        "drm_gl_btn": "Authorize (GL/SteamTools)",
+        "drm_log": "Log",
+        "drm_nav": "D-Encryption",
+        "drm_tip_select_cw": "Please select a CW file first",
+        "drm_tip_enter_code": "Please enter auth code",
+        "drm_tip_decrypt_first": "Please decrypt CW file first",
+        "drm_tip_valid_appid": "Please enter a valid AppID",
+        "drm_missing_dep": "Missing Dependency",
+        "drm_missing_dep_hint": "Please install pycryptodome: pip install pycryptodome",
+        "drm_decrypt_failed": "Decrypt Failed",
+        "drm_download_failed": "Download Failed",
+        "drm_auth_success": "Authorization Successful",
+        "drm_auth_failed": "Authorization Failed","restart_steam_title": "Restart Steam",
         "restart_steam_confirm_message": "Are you sure you want to restart Steam?\n\nThis will close the currently running Steam and restart it.",
         
         # 缺失的翻译键
@@ -469,703 +794,75 @@ TEXTS = {
         "st_fixed_manifest_always": "Always",
         "st_fixed_manifest_never": "Never",
         "st_fixed_manifest_ask": "Ask",
+        "patch_manifest_mode": "Patch Manifest",
+        "patch_manifest_mode_hint": "Automatically complete missing manifest files after import",
+        "patch_manifest_always": "Always",
+        "patch_manifest_never": "Never",
+        "patch_manifest_ask": "Ask",
+        "patch_manifest_ask_hint": "Complete missing manifest files?",
         "dlc_timeout": "DLC Network Timeout",
         "dlc_timeout_hint": "Timeout for fetching DLC list, increase if network is slow (seconds)",
         "show_progress_bar": "Show Progress Bar",
         "show_progress_bar_hint": "Show progress bar during search and installation for better user experience",
         "name_not_found": "Name Not Found",
         "fetch_failed": "Fetch Failed",
-    },
-    "fr_FR": {
-        "app_title": "FluentInstall",
-        "home": "Accueil",
-        "search": "Rechercher",
-        "settings": "Paramètres",
-        "default_page": "Page par défaut",
-        "default_page_hint": "Sélectionnez la page par défaut à afficher au démarrage",
-        "default_page_home": "Accueil",
-        "default_page_search": "Recherche",
-        "restart_steam": "Redémarrer Steam",
-        "installed_games": "Jeux installés",
-        "search_placeholder": "Rechercher un nom de jeu ou AppID",
-        "loading": "Chargement...",
-        "no_games": "Aucun jeu",
-        "delete": "Supprimer",
-        "confirm_delete": "Confirmer la suppression",
-        "delete_message": "Êtes-vous sûr de vouloir supprimer l'AppID {0}?\n\nCette action ne peut pas être annulée.",
-        "deleting": "Suppression en cours",
-        "delete_success": "Suppression réussie",
-        "delete_failed": "Échec de la suppression",
-        "search_and_add": "Rechercher et ajouter des jeux",
-        "game_name_or_appid": "Entrez le nom du jeu ou AppID / lien Steam",
-        "search_button": "Rechercher",
-        "add_options": "Options d'ajout",
-        "add_all_dlc": "Ajouter tous les DLC",
-        "patch_depot_key": "Patch clé de dépôt",
-        "patch_manifest": "Patch Manifest",
-        "manifest_source": "Source du manifeste:",
-        "add_game": "Ajouter un jeu",
-        "steam_path": "Chemin Steam",
-        "steam_path_hint": "Sélectionnez le chemin d'installation Steam, laissez vide pour détection automatique",
-        "github_token": "Jeton personnel GitHub",
-        "github_token_hint": "Optionnel, pour augmenter les limites de requêtes API",
-        "basic_settings": "Paramètres de base",
-        "appearance": "Apparence",
-        "theme_mode": "Mode du thème",
-        "theme_color": "Couleur du thème",
-        "language": "Langue",
-        "save_settings": "Enregistrer les paramètres",
-        "about": "À propos",
-        "thanks": "Crédits",
-        "restart_required": "Redémarrage requis",
-        "language_changed": "Langue changée en {0}\n\nRedémarrer l'application maintenant pour appliquer les changements?",
-        "theme_mode_changed": "Mode du thème changé en {0}\n\nRedémarrer l'application maintenant pour appliquer les changements?",
-        "theme_color_changed": "Couleur du thème changée en {0}\n\nRedémarrer l'application maintenant pour appliquer les changements?",
-        "restart_steam_confirm": "Redémarrer Steam",
-        "restart_steam_message": "Êtes-vous sûr de vouloir redémarrer Steam?\n\nCela fermera Steam en cours et le redémarrera.",
-        "total_games": "Total: {0} jeux | SteamTools: {1} | GreenLuma: {2}",
-        "load_failed": "Échec du chargement: {0}",
-        "reset_settings": "Réinitialiser les paramètres",
-        "reset_settings_message": "Êtes-vous sûr de vouloir réinitialiser tous les paramètres par défaut?\n\nCette action ne peut pas être annulée.",
-        "reset_success": "Réinitialisation réussie",
-        "reset_success_message": "Les paramètres ont été réinitialisés, veuillez recharger la page",
-        "reset_failed": "Échec de la réinitialisation",
-        "restarting": "Redémarrage en cours",
-        "restarting_message": "Redémarrage de Steam, veuillez patienter...",
-        "restart_success": "Redémarrage réussi",
-        "restart_success_message": "Steam a été redémarré",
-        "restart_failed": "Échec du redémarrage",
-        "restart_failed_message": "Échec du redémarrage de Steam, veuillez redémarrer manuellement",
-        "restart_error_message": "Erreur lors du redémarrage de Steam: {0}",
-        "application_config": "Configuration de l'application",
-        "debug_mode": "Mode débogage",
-        "debug_mode_hint": "Activer la sortie détaillée du journal de débogage",
-        "enable_debug_log": "Activer la sortie détaillée du journal de débogage",
-        "save_log_files": "Enregistrer les fichiers journaux",
-        "save_logs_to_file": "Enregistrer les journaux dans un fichier",
-        "save_log_files_hint": "Enregistrer les journaux dans un fichier",
-        "unlocker_mode": "Mode de déverrouillage",
-        "auto_detect": "Détection automatique",
-        "force_steamtools": "Forcer SteamTools",
-        "force_greenluma": "Forcer GreenLuma",
-        "force_unlocker_hint": "Forcer l'utilisation du déverrouilleur spécifié",
-        "download_timeout": "Délai de téléchargement",
-        "download_timeout_hint": "Délai d'attente pour les téléchargements de manifestes (secondes), augmentez si le réseau est lent",
-        "theme_mode_hint": "Sélectionnez le mode du thème de l'application",
-        "theme_color_hint": "Sélectionnez la couleur du thème",
-        "language_hint": "Sélectionnez la langue de l'application",
-        "window_effect": "Effet de fenêtre",
-        "window_effect_hint": "Sélectionnez l'effet d'arrière-plan de la fenêtre",
-        "effect_none": "Aucun effet",
-        "effect_mica": "Mica (Win11)",
-        "effect_acrylic": "Acrylic (Win10+)",
-        "effect_aero": "Aero Blur",
-        "light_theme": "Clair",
-        "dark_theme": "Sombre",
-        "follow_system": "Suivre le système",
-        "default_blue": "Bleu par défaut (#0078d4)",
-        "purple": "Violet (#9b4dca)",
-        "green": "Vert (#10893e)",
-        "orange": "Orange (#ff8c00)",
-        "red": "Rouge (#e81123)",
-        "pink": "Rose (#e3008c)",
-        "tip_source_fail": "Astuce: Si une source échoue, essayez-en une autre",
-        "auto_select": "Sélection automatique",
-        "auto_search_github": "Recherche automatique GitHub",
-        "swa_v2": "SWA V2",
-        "walftech": "Walftech",
-        "steamautocracks_v2": "SteamAutoCracks V2 (Clés seulement)",
-        "sudama": "Bibliothèque Sudama (Clés seulement)",
-        "buqiuren": "Bibliothèque d'aide de manifeste (Manifeste seulement)",
-        "github_auiowu": "GitHub (Auiowu)",
-        "check_update": "Vérifier les mises à jour",
-        "checking": "Vérification...",
-        "update_available": "Nouvelle version disponible",
-        "current_version": "Version actuelle",
-        "latest_version": "Dernière version",
-        "no_release_notes": "Pas de notes de version",
-        "go_to_download": "Télécharger",
-        "already_latest": "Déjà à jour",
-        "already_latest_content": "Vous utilisez la dernière version.",
-        "check_update_failed": "Échec de la vérification",
-        "restart_steam_title": "Redémarrer Steam",
-        "restart_steam_confirm_message": "Êtes-vous sûr de vouloir redémarrer Steam?\n\nCela fermera Steam en cours et le redémarrera.",
-        "tip": "Astuce",
-        "recognition_success": "Reconnaissance réussie",
-        "game_not_found": "Jeu non trouvé",
-        "check_game_name": "Vérifiez le nom du jeu ou essayez d'utiliser l'AppID",
-        "search_failed": "Échec de la recherche",
-        "game_selected": "Jeu sélectionné",
-        "add_success": "Ajout réussi",
-        "add_success_content": "L'AppID {0} a été ajouté avec succès, redémarrez Steam pour prendre effet",
-        "adding_game": "Ajout du jeu en cours...",
-        "please_wait_adding": "Veuillez patienter, traitement de l'ajout",
-        "process_failed": "Échec du traitement",
-        "check_logs": "Veuillez consulter les journaux",
-        "check_details": "Échec du traitement, veuillez consulter les détails ou essayer d'autres sources",
-        "auto_detect_placeholder": "Laisser vide pour détection automatique",
-        "token_placeholder": "Optionnel, pour augmenter les limites de requêtes API",
-        "load_config_failed": "Échec du chargement de la configuration",
-        "save_success": "Enregistrement réussi",
-        "save_success_content": "Configuration enregistrée",
-        "save_failed": "Échec de l'enregistrement",
-        "unknown_error": "Erreur inconnue",
-        "data_process_failed": "Échec du traitement des données",
-        "please_wait": "Veuillez patienter",
-        "unknown_game": "Jeu inconnu",
-        "reset_to_default": "Réinitialiser par défaut",
-        "about_title": "À propos",
-        "thanks_title": "Crédits",
-        "about_text": "Cai Install - Version Fluent Design\n\nVersion: 1.7\n\nCeci est un outil de déverrouillage de jeu Steam moderne basé sur PyQt6-Fluent-Widgets.\n\nFonctionnalités:\n• Style Fluent Design\n• Support de plusieurs sources de manifestes\n• Recherche et ajout de jeux\n• Gestion des jeux installés\n• Personnalisation du thème\n\nURL du projet: https://github.com/zhouchentao666/Cai-install-Fluent-GUI",
-        "thanks_text": "Remerciements spéciaux\n\nDéveloppeurs:\n• zhouchentao666 - Développeur\n\nProjets open source:\n• PyQt6 - Bindings Python Qt6\n• PyQt-Fluent-Widgets - Bibliothèque de composants Fluent Design\n• Cai-install-Web-GUI - Auteur du projet original\n• httpx - Client HTTP asynchrone\n\nSources de manifestes:\n• SWA V2\n• Cysaw\n• Furcate\n• Walftech\n• steamdatabase\n• SteamAutoCracks\n• Sudama\n• Bibliothèque d'aide de manifeste\n\nMerci à tous les développeurs et utilisateurs qui ont contribué à ce projet!",
-        "donate": "Faire un don",
-        "donate_title": "Soutenir le développeur",
-        "donate_desc": "Si ce projet vous a été utile, n'hésitez pas à offrir un café à l'auteur ☕",
-        "donate_wechat": "WeChat Pay",
-        "donate_alipay": "Alipay",
-        "donate_loading": "Chargement...",
-        "donate_load_failed": "Échec du chargement de l'image",
-        "fixed_version": "Version fixe",
-        "auto_update": "Mise à jour auto",
-        "toggle_version_mode": "Changer le mode de version",
-        "st_settings": "Paramètres SteamTools",
-        "st_settings_hint": "Contrôler le mode de gestion des versions des fichiers SteamTools",
-        "st_fixed_enable": "Activer le mode version fixe SteamTools",
-        "st_fixed_tooltip": "Les nouveaux fichiers SteamTools utiliseront le mode version fixe par défaut",
-        "st_fixed_manifest_mode": "Réparation Manifest version fixe",
-        "st_fixed_manifest_mode_hint": "Réparer automatiquement le manifest lors du passage en version fixe",
-        "st_fixed_manifest_always": "Toujours",
-        "st_fixed_manifest_never": "Jamais",
-        "st_fixed_manifest_ask": "Demander",
-        "dlc_timeout": "Délai réseau DLC",
-        "dlc_timeout_hint": "Délai d'attente pour récupérer la liste DLC, augmenter si le réseau est lent (secondes)",
-        "show_progress_bar": "Afficher la barre de progression",
-        "show_progress_bar_hint": "Afficher la barre de progression pendant la recherche et l'ajout pour une meilleure expérience",
-
-
-        "hide_search_hint": "Masquer l'option de recherche dans la barre latérale",
-
-        "name_not_found": "Nom introuvable",
-        "fetch_failed": "Échec de récupération",
-    },
-    "ru_RU": {
-        "app_title": "FluentInstall",
-        "home": "Главная",
-        "search": "Поиск",
-        "settings": "Настройки",
-        "default_page": "Страница по умолчанию",
-        "default_page_hint": "Выберите страницу по умолчанию для отображения при запуске",
-        "default_page_home": "Главная",
-        "default_page_search": "Поиск",
-        "restart_steam": "Перезапустить Steam",
-        "installed_games": "Установленные игры",
-        "search_placeholder": "Поиск названия игры или AppID",
-        "loading": "Загрузка...",
-        "no_games": "Нет игр",
-        "delete": "Удалить",
-        "confirm_delete": "Подтвердить удаление",
-        "delete_message": "Вы уверены, что хотите удалить AppID {0}?\n\nЭто действие нельзя отменить.",
-        "deleting": "Удаление",
-        "delete_success": "Удаление успешно",
-        "delete_failed": "Ошибка удаления",
-        "search_and_add": "Поиск и добавление игр",
-        "game_name_or_appid": "Введите название игры или AppID / ссылку Steam",
-        "search_button": "Поиск",
-        "add_options": "Опции добавления",
-        "add_all_dlc": "Добавить все DLC",
-        "patch_depot_key": "Патч ключ депо",
-        "patch_manifest": "Патч манифеста",
-        "manifest_source": "Источник манифеста:",
-        "add_game": "Добавить игру",
-        "steam_path": "Путь Steam",
-        "steam_path_hint": "Выберите путь установки Steam, оставьте пустым для автоматического обнаружения",
-        "github_token": "Персональный токен GitHub",
-        "github_token_hint": "Необязательно, для увеличения лимитов API запросов",
-        "basic_settings": "Базовые настройки",
-        "appearance": "Внешний вид",
-        "theme_mode": "Режим темы",
-        "theme_color": "Цвет темы",
-        "language": "Язык",
-        "save_settings": "Сохранить настройки",
-        "about": "О программе",
-        "thanks": "Благодарности",
-        "restart_required": "Требуется перезапуск",
-        "language_changed": "Язык изменен на {0}\n\nПерезапустить приложение сейчас для применения изменений?",
-        "theme_mode_changed": "Режим темы изменен на {0}\n\nПерезапустить приложение сейчас для применения изменений?",
-        "theme_color_changed": "Цвет темы изменен на {0}\n\nПерезапустить приложение сейчас для применения изменений?",
-        "restart_steam_confirm": "Перезапустить Steam",
-        "restart_steam_message": "Вы уверены, что хотите перезапустить Steam?\n\nЭто закроет текущий Steam и перезапустит его.",
-        "total_games": "Всего: {0} игр | SteamTools: {1} | GreenLuma: {2}",
-        "load_failed": "Ошибка загрузки: {0}",
-        "reset_settings": "Сбросить настройки",
-        "reset_settings_message": "Вы уверены, что хотите сбросить все настройки по умолчанию?\n\nЭто действие нельзя отменить.",
-        "reset_success": "Сброс успешен",
-        "reset_success_message": "Настройки сброшены по умолчанию, пожалуйста, перезагрузите страницу",
-        "reset_failed": "Ошибка сброса",
-        "restarting": "Перезапуск",
-        "restarting_message": "Перезапуск Steam, пожалуйста подождите...",
-        "restart_success": "Перезапуск успешен",
-        "restart_success_message": "Steam был перезапущен",
-        "restart_failed": "Ошибка перезапуска",
-        "restart_failed_message": "Ошибка перезапуска Steam, пожалуйста перезапустите вручную",
-        "restart_error_message": "Ошибка при перезапуске Steam: {0}",
-        "application_config": "Конфигурация приложения",
-        "debug_mode": "Режим отладки",
-        "debug_mode_hint": "Включить подробный вывод журнала отладки",
-        "enable_debug_log": "Включить подробный вывод журнала отладки",
-        "save_log_files": "Сохранить файлы журналов",
-        "save_logs_to_file": "Сохранить журналы в файл",
-        "save_log_files_hint": "Сохранить журналы в файл",
-        "unlocker_mode": "Режим разблокировки",
-        "auto_detect": "Автоопределение",
-        "force_steamtools": "Принудительно SteamTools",
-        "force_greenluma": "Принудительно GreenLuma",
-        "force_unlocker_hint": "Принудительно использовать указанный инструмент разблокировки",
-        "download_timeout": "Таймаут загрузки",
-        "download_timeout_hint": "Таймаут в секундах для загрузки манифестов, увеличьте при медленной сети",
-        "theme_mode_hint": "Выберите режим темы приложения",
-        "theme_color_hint": "Выберите цвет темы",
-        "language_hint": "Выберите язык приложения",
-        "window_effect": "Эффект окна",
-        "window_effect_hint": "Выберите эффект фона окна",
-        "effect_none": "Без эффекта",
-        "effect_mica": "Мика (Win11)",
-        "effect_acrylic": "Акрил (Win10+)",
-        "effect_aero": "Aero Размытие",
-        "light_theme": "Светлая",
-        "dark_theme": "Темная",
-        "follow_system": "Следовать системе",
-        "default_blue": "Синий по умолчанию (#0078d4)",
-        "purple": "Фиолетовый (#9b4dca)",
-        "green": "Зеленый (#10893e)",
-        "orange": "Оранжевый (#ff8c00)",
-        "red": "Красный (#e81123)",
-        "pink": "Розовый (#e3008c)",
-        "tip_source_fail": "Совет: Если один источник не работает, попробуйте другой",
-        "auto_select": "Автоматический выбор",
-        "auto_search_github": "Автопоиск GitHub",
-        "swa_v2": "SWA V2",
-        "walftech": "Walftech",
-        "steamautocracks_v2": "SteamAutoCracks V2 (Только ключи)",
-        "sudama": "Библиотека Sudama (Только ключи)",
-        "buqiuren": "Библиотека помощи манифеста (Только манифест)",
-        "github_auiowu": "GitHub (Auiowu)",
-        "check_update": "Проверить обновления",
-        "checking": "Проверка...",
-        "update_available": "Доступна новая версия",
-        "current_version": "Текущая версия",
-        "latest_version": "Последняя версия",
-        "no_release_notes": "Нет примечаний",
-        "go_to_download": "Скачать",
-        "already_latest": "Уже актуально",
-        "already_latest_content": "У вас установлена последняя версия.",
-        "check_update_failed": "Ошибка проверки",
-        "restart_steam_title": "Перезапустить Steam",
-        "restart_steam_confirm_message": "Вы уверены, что хотите перезапустить Steam?\n\nЭто закроет текущий Steam и перезапустит его.",
-        "tip": "Совет",
-        "recognition_success": "Успешное распознавание",
-        "game_not_found": "Игра не найдена",
-        "check_game_name": "Пожалуйста, проверьте название игры или попробуйте использовать AppID",
-        "search_failed": "Ошибка поиска",
-        "game_selected": "Игра выбрана",
-        "add_success": "Успешное добавление",
-        "add_success_content": "AppID {0} успешно добавлен, перезапустите Steam для применения",
-        "adding_game": "Добавление игры...",
-        "please_wait_adding": "Пожалуйста подождите, обработка добавления",
-        "process_failed": "Ошибка обработки",
-        "check_logs": "Пожалуйста, проверьте журналы",
-        "check_details": "Ошибка обработки, пожалуйста, проверьте детали или попробуйте другие источники",
-        "auto_detect_placeholder": "Оставьте пустым для автоматического обнаружения",
-        "token_placeholder": "Необязательно, для увеличения лимитов API запросов",
-        "load_config_failed": "Ошибка загрузки конфигурации",
-        "save_success": "Сохранение успешно",
-        "save_success_content": "Конфигурация сохранена",
-        "save_failed": "Ошибка сохранения",
-        "unknown_error": "Неизвестная ошибка",
-        "data_process_failed": "Ошибка обработки данных",
-        "please_wait": "Пожалуйста подождите",
-        "unknown_game": "Неизвестная игра",
-        "reset_to_default": "Сбросить по умолчанию",
-        "about_title": "О программе",
-        "thanks_title": "Благодарности",
-        "about_text": "Cai Install - Версия Fluent Design\n\nВерсия: 1.7\n\nЭто современный инструмент разблокировки игр Steam на основе PyQt6-Fluent-Widgets.\n\nФункции:\n• Стиль Fluent Design\n• Поддержка нескольких источников манифестов\n• Поиск и добавление игр\n• Управление установленными играми\n• Настройка темы\n\nURL проекта: https://github.com/zhouchentao666/Cai-install-Fluent-GUI",
-        "thanks_text": "Особая благодарность\n\nРазработчики:\n• zhouchentao666 - Разработчик\n\nПроекты с открытым исходным кодом:\n• PyQt6 - Привязки Python Qt6\n• PyQt-Fluent-Widgets - Библиотека компонентов Fluent Design\n• Cai-install-Web-GUI - Автор оригинального проекта\n• httpx - Асинхронный HTTP клиент\n\nИсточники манифестов:\n• SWA V2\n• Cysaw\n• Furcate\n• Walftech\n• steamdatabase\n• SteamAutoCracks\n• Sudama\n• Библиотека помощи манифеста\n\nСпасибо всем разработчикам и пользователям, внесшим вклад в этот проект!",
-        "donate": "Пожертвовать",
-        "donate_title": "Поддержать разработчика",
-        "donate_desc": "Если проект оказался полезным, угостите автора кофе ☕",
-        "donate_wechat": "WeChat Pay",
-        "donate_alipay": "Alipay",
-        "donate_loading": "Загрузка...",
-        "donate_load_failed": "Не удалось загрузить изображение",
-        "fixed_version": "Фиксированная версия",
-        "auto_update": "Авто обновление",
-        "toggle_version_mode": "Переключить режим версии",
-        "st_settings": "Настройки SteamTools",
-        "st_settings_hint": "Управление режимом версий файлов SteamTools",
-        "st_fixed_enable": "Включить режим фиксированной версии SteamTools",
-        "st_fixed_tooltip": "Новые файлы SteamTools будут использовать режим фиксированной версии по умолчанию",
-        "st_fixed_manifest_mode": "Исправление манифеста фикс. версии",
-        "st_fixed_manifest_mode_hint": "Автоматически исправлять манифест при переключении на фиксированную версию",
-        "st_fixed_manifest_always": "Всегда",
-        "st_fixed_manifest_never": "Никогда",
-        "st_fixed_manifest_ask": "Спрашивать",
-        "dlc_timeout": "Тайм-аут сети DLC",
-        "dlc_timeout_hint": "Тайм-аут получения списка DLC, увеличьте при медленной сети (секунды)",
-        "show_progress_bar": "Показывать индикатор прогресса",
-        "show_progress_bar_hint": "Показывать индикатор прогресса во время поиска и добавления для лучшего опыта",
-
-        "hide_search": "Скрыть поиск",
-        "hide_search_hint": "Скрыть опцию поиска в боковой панели",
-
-        "name_not_found": "Имя не найдено",
-        "fetch_failed": "Ошибка получения",
-    },
-    "de_DE": {
-        "app_title": "FluentInstall",
-        "home": "Startseite",
-        "search": "Suchen",
-        "settings": "Einstellungen",
-        "default_page": "Standardseite",
-        "default_page_hint": "Wählen Sie die Standardseite, die beim Start angezeigt wird",
-        "default_page_home": "Startseite",
-        "default_page_search": "Suche",
-        "restart_steam": "Steam neu starten",
-        "installed_games": "Installierte Spiele",
-        "search_placeholder": "Spielname oder AppID suchen",
-        "loading": "Laden...",
-        "no_games": "Keine Spiele",
-        "delete": "Löschen",
-        "confirm_delete": "Löschung bestätigen",
-        "delete_message": "Sind Sie sicher, dass Sie AppID {0} löschen möchten?\n\nDiese Aktion kann nicht rückgängig gemacht werden.",
-        "deleting": "Löschen",
-        "delete_success": "Löschung erfolgreich",
-        "delete_failed": "Löschung fehlgeschlagen",
-        "search_and_add": "Spiele suchen und hinzufügen",
-        "game_name_or_appid": "Spielnamen oder AppID / Steam-Link eingeben",
-        "search_button": "Suchen",
-        "add_options": "Hinzufügen-Optionen",
-        "add_all_dlc": "Alle DLCs hinzufügen",
-        "patch_depot_key": "Depot-Schlüssel patchen",
-        "patch_manifest": "Manifest patchen",
-        "manifest_source": "Manifest-Quelle:",
-        "add_game": "Spiel hinzufügen",
-        "steam_path": "Steam-Pfad",
-        "steam_path_hint": "Steam-Installationspfad auswählen, leer lassen für automatische Erkennung",
-        "github_token": "GitHub Persönliches Token",
-        "github_token_hint": "Optional, für erhöhte API-Anfrage-Limits",
-        "basic_settings": "Grundeinstellungen",
-        "appearance": "Erscheinungsbild",
-        "theme_mode": "Themen-Modus",
-        "theme_color": "Themen-Farbe",
-        "language": "Sprache",
-        "save_settings": "Einstellungen speichern",
-        "about": "Über",
-        "thanks": "Danksagungen",
-        "restart_required": "Neustart erforderlich",
-        "language_changed": "Sprache geändert zu {0}\n\nJetzt Anwendung neu starten um Änderungen anzuwenden?",
-        "theme_mode_changed": "Themen-Modus geändert zu {0}\n\nJetzt Anwendung neu starten um Änderungen anzuwenden?",
-        "theme_color_changed": "Themen-Farbe geändert zu {0}\n\nJetzt Anwendung neu starten um Änderungen anzuwenden?",
-        "restart_steam_confirm": "Steam neu starten",
-        "restart_steam_message": "Sind Sie sicher, dass Sie Steam neu starten möchten?\n\nDies wird das aktuelle Steam schließen und neu starten.",
-        "total_games": "Gesamt: {0} Spiele | SteamTools: {1} | GreenLuma: {2}",
-        "load_failed": "Laden fehlgeschlagen: {0}",
-        "reset_settings": "Einstellungen zurücksetzen",
-        "reset_settings_message": "Sind Sie sicher, dass Sie alle Einstellungen auf Standard zurücksetzen möchten?\n\nDiese Aktion kann nicht rückgängig gemacht werden.",
-        "reset_success": "Zurücksetzen erfolgreich",
-        "reset_success_message": "Einstellungen wurden auf Standard zurückgesetzt, bitte Seite neu laden",
-        "reset_failed": "Zurücksetzen fehlgeschlagen",
-        "restarting": "Neustart",
-        "restarting_message": "Steam wird neu gestartet, bitte warten...",
-        "restart_success": "Neustart erfolgreich",
-        "restart_success_message": "Steam wurde neu gestartet",
-        "restart_failed": "Neustart fehlgeschlagen",
-        "restart_failed_message": "Steam-Neustart fehlgeschlagen, bitte manuell neu starten",
-        "restart_error_message": "Fehler beim Neustart von Steam: {0}",
-        "application_config": "Anwendungs-Konfiguration",
-        "debug_mode": "Debug-Modus",
-        "debug_mode_hint": "Detaillierte Debug-Log-Ausgabe aktivieren",
-        "enable_debug_log": "Detaillierte Debug-Log-Ausgabe aktivieren",
-        "save_log_files": "Log-Dateien speichern",
-        "save_logs_to_file": "Logs in Datei speichern",
-        "save_log_files_hint": "Logs in Datei speichern",
-        "unlocker_mode": "Unlocker-Modus",
-        "auto_detect": "Automatische Erkennung",
-        "force_steamtools": "SteamTools erzwingen",
-        "force_greenluma": "GreenLuma erzwingen",
-        "force_unlocker_hint": "Verwendung des angegebenen Unlockers erzwingen",
-        "download_timeout": "Download-Timeout",
-        "download_timeout_hint": "Timeout in Sekunden für Manifest-Downloads, erhöhen Sie bei langsamem Netzwerk",
-        "theme_mode_hint": "Wählen Sie den Anwendungs-Themen-Modus",
-        "theme_color_hint": "Wählen Sie die Themen-Farbe",
-        "language_hint": "Wählen Sie die Anwendungs-Sprache",
-        "window_effect": "Fenster-Effekt",
-        "window_effect_hint": "Wählen Sie den Fenster-Hintergrund-Effekt",
-        "effect_none": "Kein Effekt",
-        "effect_mica": "Mica (Win11)",
-        "effect_acrylic": "Acrylic (Win10+)",
-        "effect_aero": "Aero Blur",
-        "light_theme": "Hell",
-        "dark_theme": "Dunkel",
-        "follow_system": "System folgen",
-        "default_blue": "Standard-Blau (#0078d4)",
-        "purple": "Violett (#9b4dca)",
-        "green": "Grün (#10893e)",
-        "orange": "Orange (#ff8c00)",
-        "red": "Rot (#e81123)",
-        "pink": "Pink (#e3008c)",
-        "tip_source_fail": "Tipp: Wenn eine Quelle fehlschlägt, versuchen Sie eine andere",
-        "auto_select": "Automatisch auswählen",
-        "auto_search_github": "Automatische GitHub-Suche",
-        "swa_v2": "SWA V2",
-        "walftech": "Walftech",
-        "steamautocracks_v2": "SteamAutoCracks V2 (Nur Schlüssel)",
-        "sudama": "Sudama-Bibliothek (Nur Schlüssel)",
-        "buqiuren": "Manifest-Hilfsbibliothek (Nur Manifest)",
-        "github_auiowu": "GitHub (Auiowu)",
-        "check_update": "Nach Updates suchen",
-        "checking": "Suche...",
-        "update_available": "Neue Version verfügbar",
-        "current_version": "Aktuelle Version",
-        "latest_version": "Neueste Version",
-        "no_release_notes": "Keine Versionshinweise",
-        "go_to_download": "Herunterladen",
-        "already_latest": "Bereits aktuell",
-        "already_latest_content": "Sie verwenden die neueste Version.",
-        "check_update_failed": "Prüfung fehlgeschlagen",
-        "restart_steam_title": "Steam neu starten",
-        "restart_steam_confirm_message": "Sind Sie sicher, dass Sie Steam neu starten möchten?\n\nDies wird das aktuelle Steam schließen und neu starten.",
-        "tip": "Tipp",
-        "recognition_success": "Erkennung erfolgreich",
-        "game_not_found": "Spiel nicht gefunden",
-        "check_game_name": "Bitte überprüfen Sie den Spielnamen oder versuchen Sie die AppID",
-        "search_failed": "Suche fehlgeschlagen",
-        "game_selected": "Spiel ausgewählt",
-        "add_success": "Hinzufügen erfolgreich",
-        "add_success_content": "AppID {0} wurde erfolgreich hinzugefügt, starten Sie Steam neu um es zu aktivieren",
-        "adding_game": "Spiel wird zur Bibliothek hinzugefügt...",
-        "please_wait_adding": "Bitte warten Sie, Hinzufügen wird verarbeitet",
-        "process_failed": "Verarbeitung fehlgeschlagen",
-        "check_logs": "Bitte überprüfen Sie die Logs",
-        "check_details": "Verarbeitung fehlgeschlagen, bitte überprüfen Sie die Details oder versuchen Sie andere Quellen",
-        "auto_detect_placeholder": "Leer lassen für automatische Erkennung",
-        "token_placeholder": "Optional, für erhöhte API-Anfrage-Limits",
-        "load_config_failed": "Konfiguration laden fehlgeschlagen",
-        "save_success": "Speichern erfolgreich",
-        "save_success_content": "Konfiguration gespeichert",
-        "save_failed": "Speichern fehlgeschlagen",
-        "unknown_error": "Unbekannter Fehler",
-        "data_process_failed": "Datenverarbeitung fehlgeschlagen",
-        "please_wait": "Bitte warten Sie",
-        "unknown_game": "Unbekanntes Spiel",
-        "reset_to_default": "Auf Standard zurücksetzen",
-        "about_title": "Über",
-        "thanks_title": "Danksagungen",
-        "about_text": "Cai Install - Fluent Design Version\n\nVersion: \n1.7\nDies ist ein modernes Steam-Spiel-Unlocking-Tool basierend auf PyQt6-Fluent-Widgets.\n\nFunktionen:\n• Fluent Design Stil\n• Unterstützung für mehrere Manifest-Quellen\n• Spielsuche und -hinzufügen\n• Verwaltung installierter Spiele\n• Themen-Anpassung\n\nProjekt-URL: https://github.com/zhouchentao666/Cai-install-Fluent-GUI",
-        "thanks_text": "Besondere Danksagung\n\nEntwickler:\n• zhouchentao666 - Entwickler\n\nOpen-Source-Projekte:\n• PyQt6 - Qt6 Python Bindings\n• PyQt-Fluent-Widgets - Fluent Design Komponentenbibliothek\n• Cai-install-Web-GUI - Originalprojekt-Autor\n• httpx - Asynchroner HTTP-Client\n\nManifest-Quellen:\n• SWA V2\n• Cysaw\n• Furcate\n• Walftech\n• steamdatabase\n• SteamAutoCracks\n• Sudama\n• Manifest-Hilfsbibliothek\n\nVielen Dank an alle Entwickler und Benutzer, die zu diesem Projekt beigetragen haben!",
-        "donate": "Spenden",
-        "donate_title": "Entwickler unterstützen",
-        "donate_desc": "Wenn dieses Projekt hilfreich war, spendieren Sie dem Autor einen Kaffee ☕",
-        "donate_wechat": "WeChat Pay",
-        "donate_alipay": "Alipay",
-        "donate_loading": "Laden...",
-        "donate_load_failed": "Bild konnte nicht geladen werden",
-        "fixed_version": "Feste Version",
-        "auto_update": "Auto-Update",
-        "toggle_version_mode": "Versionsmodus wechseln",
-        "st_settings": "SteamTools-Einstellungen",
-        "st_settings_hint": "Versionsverwaltungsmodus für SteamTools-Dateien steuern",
-        "st_fixed_enable": "SteamTools Feste Version aktivieren",
-        "st_fixed_tooltip": "Neue SteamTools-Dateien verwenden standardmäßig den festen Versionsmodus",
-        "st_fixed_manifest_mode": "Manifest-Reparatur feste Version",
-        "st_fixed_manifest_mode_hint": "Manifest automatisch reparieren beim Wechsel zur festen Version",
-        "st_fixed_manifest_always": "Immer",
-        "st_fixed_manifest_never": "Nie",
-        "st_fixed_manifest_ask": "Fragen",
-        "dlc_timeout": "DLC-Netzwerk-Timeout",
-        "dlc_timeout_hint": "Timeout für DLC-Liste, bei langsamen Netzwerk erhöhen (Sekunden)",
-        "show_progress_bar": "Fortschrittsbalken anzeigen",
-        "show_progress_bar_hint": "Fortschrittsbalken während Suche und Hinzufügen für bessere Benutzererfahrung anzeigen",
-
-        "hide_search": "Suche ausblenden",
-        "hide_search_hint": "Suchoption in der Seitenleiste ausblenden",
-
-        "name_not_found": "Name nicht gefunden",
-        "fetch_failed": "Abruf fehlgeschlagen",
-    },
-    "ja_JP": {
-        "app_title": "FluentInstall",
-        "home": "ホーム",
-        "search": "検索",
-        "settings": "設定",
-        "default_page": "デフォルトページ",
-        "default_page_hint": "アプリケーション起動時に表示するデフォルトページを選択",
-        "default_page_home": "ホーム",
-        "default_page_search": "ライブラリ検索",
-        "restart_steam": "Steamを再起動",
-        "installed_games": "インストール済みゲーム",
-        "search_placeholder": "ゲーム名またはAppIDを検索",
-        "loading": "読み込み中...",
-        "no_games": "ゲームなし",
-        "delete": "削除",
-        "confirm_delete": "削除の確認",
-        "delete_message": "AppID {0} を削除してもよろしいですか？\n\nこの操作は元に戻せません。",
-        "deleting": "削除中",
-        "delete_success": "削除成功",
-        "delete_failed": "削除失敗",
-        "search_and_add": "ゲームを検索して追加",
-        "game_name_or_appid": "ゲーム名またはAppID/Steamリンクを入力",
-        "search_button": "検索",
-        "add_options": "追加オプション",
-        "add_all_dlc": "すべてのDLCを追加",
-        "patch_manifest": "マニフェストをパッチ",
-        "patch_depot_key": "デポットキーをパッチ",
-        "manifest_source": "マニフェストソース:",
-        "add_game": "ゲームを追加",
-        "steam_path": "Steamパス",
-        "steam_path_hint": "Steamインストールパスを選択、空の場合は自動検出",
-        "github_token": "GitHubパーソナルトークン",
-        "github_token_hint": "オプション、APIリクエスト制限を向上",
-        "basic_settings": "基本設定",
-        "appearance": "外観",
-        "theme_mode": "テーマモード",
-        "theme_color": "テーマカラー",
-        "language": "言語",
-        "save_settings": "設定を保存",
-        "about": "について",
-        "thanks": "謝辞",
-        "restart_required": "再起動が必要",
-        "language_changed": "言語が {0} に変更されました\n\n変更を適用するために今すぐアプリケーションを再起動しますか？",
-        "theme_mode_changed": "テーマモードが {0} に変更されました\n\n変更を適用するために今すぐアプリケーションを再起動しますか？",
-        "theme_color_changed": "テーマカラーが {0} に変更されました\n\n変更を適用するために今すぐアプリケーションを再起動しますか？",
-        "restart_steam_confirm": "Steamを再起動",
-        "restart_steam_message": "Steamを再起動してもよろしいですか？\n\n現在実行中のSteamを終了して再起動します。",
-        "total_games": "合計: {0} ゲーム | SteamTools: {1} | GreenLuma: {2}",
-        "load_failed": "読み込み失敗: {0}",
-        "reset_settings": "設定をリセット",
-        "reset_settings_message": "すべての設定をデフォルトにリセットしてもよろしいですか？\n\nこの操作は元に戻せません。",
-        "reset_success": "リセット成功",
-        "reset_success_message": "設定がデフォルトにリセットされました、ページを再読み込みしてください",
-        "reset_failed": "リセット失敗",
-        "restarting": "再起動中",
-        "restarting_message": "Steamを再起動中、しばらくお待ちください...",
-        "restart_success": "再起動成功",
-        "restart_success_message": "Steamが再起動されました",
-        "restart_failed": "再起動失敗",
-        "restart_failed_message": "Steamの再起動に失敗しました、手動で再起動してください",
-        "restart_error_message": "Steamの再起動エラー: {0}",
-        "application_config": "アプリケーション設定",
-        "debug_mode": "デバッグモード",
-        "debug_mode_hint": "詳細なデバッグログ出力を有効にする",
-        "enable_debug_log": "詳細なデバッグログ出力を有効にする",
-        "save_log_files": "ログファイルを保存",
-        "save_logs_to_file": "ログをファイルに保存",
-        "save_log_files_hint": "ログをファイルに保存",
-        "unlocker_mode": "アンロッカーモード",
-        "auto_detect": "自動検出",
-        "force_steamtools": "SteamToolsを強制",
-        "force_greenluma": "GreenLumaを強制",
-        "force_unlocker_hint": "指定されたアンロッカーを強制的に使用",
-        "download_timeout": "ダウンロードタイムアウト",
-        "download_timeout_hint": "マニフェストダウンロードのタイムアウト（秒）、ネットワークが遅い場合は増やしてください",
-        "theme_mode_hint": "アプリケーションテーマモードを選択",
-        "theme_color_hint": "テーマカラーを選択",
-        "language_hint": "アプリケーション言語を選択",
-        "window_effect": "ウィンドウエフェクト",
-        "window_effect_hint": "ウィンドウ背景エフェクトを選択",
-        "effect_none": "エフェクトなし",
-        "effect_mica": "マイカ (Win11)",
-        "effect_acrylic": "アクリル (Win10+)",
-        "effect_aero": "Aero ブラー",
-        "light_theme": "ライト",
-        "dark_theme": "ダーク",
-        "follow_system": "システムに従う",
-        "default_blue": "デフォルトブルー (#0078d4)",
-        "purple": "パープル (#9b4dca)",
-        "green": "グリーン (#10893e)",
-        "orange": "オレンジ (#ff8c00)",
-        "red": "レッド (#e81123)",
-        "pink": "ピンク (#e3008c)",
-        "tip_source_fail": "ヒント: ソースが失敗した場合は別のソースを試してください",
-        "auto_search_github": "GitHubを自動検索",
-        "auto_select": "自動選択",
-        "swa_v2": "SWA V2",
-        "walftech": "Walftech",
-        "steamautocracks_v2": "SteamAutoCracks V2 (キーのみ)",
-        "sudama": "Sudamaライブラリ (キーのみ)",
-        "buqiuren": "マニフェストヘルパーライブラリ (マニフェストのみ)",
-        "github_auiowu": "GitHub (Auiowu)",
-        "check_update": "アップデートを確認",
-        "checking": "確認中...",
-        "update_available": "新しいバージョンが利用可能",
-        "current_version": "現在のバージョン",
-        "latest_version": "最新バージョン",
-        "no_release_notes": "リリースノートなし",
-        "go_to_download": "ダウンロード",
-        "already_latest": "最新版です",
-        "already_latest_content": "最新バージョンを使用しています。",
-        "check_update_failed": "確認に失敗しました",
-        "restart_steam_title": "Steamを再起動",
-        "restart_steam_confirm_message": "Steamを再起動してもよろしいですか？\n\n現在実行中のSteamを終了して再起動します。",
-        "tip": "ヒント",
-        "recognition_success": "認識成功",
-        "game_not_found": "ゲームが見つかりません",
-        "check_game_name": "ゲーム名を確認するか、AppIDをお試しください",
-        "search_failed": "検索失敗",
-        "game_selected": "ゲームが選択されました",
-        "add_success": "追加成功",
-        "add_success_content": "AppID {0} が正常に追加されました、Steamを再起動して有効にしてください",
-        "adding_game": "ゲームをライブラリに追加中...",
-        "please_wait_adding": "しばらくお待ちください、追加処理中です",
-        "process_failed": "処理失敗",
-        "check_logs": "ログを確認してください",
-        "check_details": "処理に失敗しました、詳細を確認するか別のソースをお試しください",
-        "auto_detect_placeholder": "自動検出の場合は空のままにしてください",
-        "token_placeholder": "オプション、APIリクエスト制限を向上",
-        "load_config_failed": "設定の読み込みに失敗しました",
-        "save_success": "保存成功",
-        "save_success_content": "設定が保存されました",
-        "save_failed": "保存失敗",
-        "unknown_error": "不明なエラー",
-        "data_process_failed": "データ処理に失敗しました",
-        "please_wait": "しばらくお待ちください",
-        "unknown_game": "不明なゲーム",
-        "reset_to_default": "デフォルトにリセット",
-        "about_title": "について",
-        "thanks_title": "謝辞",
-        "about_text": "Cai Install - Fluent Design バージョン\n\nバージョン: 1.7\n\nこれはPyQt6-Fluent-WidgetsをベースにしたモダンなSteamゲームアンロックツールです。\n\n機能:\n• Fluent Designスタイル\n• 複数のマニフェストソースをサポート\n• ゲーム検索と追加\n• インストール済みゲームの管理\n• テーマカスタマイズ\n\nプロジェクトURL: https://github.com/zhouchentao666/Cai-install-Fluent-GUI",
-        "thanks_text": "特別な感謝\n\n開発者:\n• zhouchentao666 - 開発者\n\nオープンソースプロジェクト:\n• PyQt6 - Qt6 Pythonバインディング\n• PyQt-Fluent-Widgets - Fluent Designコンポーネントライブラリ\n• Cai-install-Web-GUI - オリジナルプロジェクト作成者\n• httpx - 非同期HTTPクライアント\n\nマニフェストソース:\n• SWA V2\n• Cysaw\n• Furcate\n• Walftech\n• steamdatabase\n• SteamAutoCracks\n• Sudama\n• マニフェストヘルパーライブラリ\n\nこのプロジェクトに貢献してくれたすべての開発者とユーザーの皆様に感謝します！",
-        "donate": "寄付",
-        "donate_title": "開発者を支援",
-        "donate_desc": "このプロジェクトが役に立った場合は、作者にコーヒーをご馳走ください ☕",
-        "donate_wechat": "WeChat Pay",
-        "donate_alipay": "Alipay",
-        "donate_loading": "読み込み中...",
-        "donate_load_failed": "画像の読み込みに失敗しました",
-        "fixed_version": "固定バージョン",
-        "auto_update": "自動更新",
-        "toggle_version_mode": "バージョンモード切替",
-        "st_settings": "SteamTools設定",
-        "st_settings_hint": "SteamToolsファイルのバージョン管理モードを制御",
-        "st_fixed_enable": "SteamTools固定バージョンモードを有効にする",
-        "st_fixed_tooltip": "新しいSteamToolsファイルはデフォルトで固定バージョンモードを使用します",
-        "st_fixed_manifest_mode": "固定バージョンマニフェスト修復",
-        "st_fixed_manifest_mode_hint": "ホームページで固定バージョンに切り替える際にマニフェストを自動修復",
-        "st_fixed_manifest_always": "常に",
-        "st_fixed_manifest_never": "从不",
-        "st_fixed_manifest_ask": "確認",
-        "dlc_timeout": "DLC ネットワークタイムアウト",
-        "dlc_timeout_hint": "DLCリスト取得のタイムアウト、ネットワークが遅い場合は増やしてください（秒）",
-        "show_progress_bar": "進捗バーを表示",
-        "show_progress_bar_hint": "検索と追加中に進捗バーを表示して、より良いユーザー体験を提供",
-
-
-        "hide_search_hint": "サイドバーの検索オプションを非表示",
-        "hide_launcher": "オンラインゲームを非表示",
-        "hide_launcher_hint": "サイドバーのオンラインゲームオプションを非表示",
-        "hide_trainer": "トレーナーを非表示",
-        "hide_trainer_hint": "サイドバーのトレーナーオプションを非表示",
-        "name_not_found": "名前が見つかりません",
-        "fetch_failed": "取得失敗",
+        "github_repos": "GitHub Repositories",
+        "github_repos_desc": "Add custom GitHub manifest repositories",
+        "zip_repos": "ZIP Manifest Libraries",
+        "zip_repos_desc": "Add custom ZIP manifest download URLs",
+        "add": "Add",
+        "add_github_repo": "Add GitHub Repo",
+        "add_zip_repo": "Add ZIP Repo",
+        "repo_name": "Display Name",
+        "repo_path": "Repository Path",
+        "repo_url": "Download URL",
+        "repo_name_placeholder": "e.g., My Custom Repo",
+        "github_repo_placeholder": "e.g., username/repository",
+        "zip_url_placeholder": "e.g., https://example.com/download/{app_id}.zip",
+        "github_repo_hint": "Format: username/repository, e.g., Auiowu/ManifestAutoUpdate",
+        "zip_url_hint": "URL must contain {app_id} placeholder, which will be replaced with actual AppID",
+        "no_repos": "No repositories configured",
+        "repo_exists": "Repository Exists",
+        "repo_already_added": "This repository has already been added",
+        "github_repo_added": "GitHub repository added successfully",
+        "zip_repo_added": "ZIP manifest library added successfully",
+        "input_incomplete": "Incomplete Input",
+        "please_fill_all_fields": "Please fill in all required fields",
+        "invalid_format": "Invalid Format",
+        "github_format_hint": "GitHub repository format should be: username/repository",
+        "zip_format_hint": "URL must contain {app_id} placeholder",
+        "save": "Save",
+        "cancel": "Cancel",
+        
+        # Kernel Detection
+        "no_kernel_title": "No Unlock Kernel Detected",
+        "no_kernel_msg": "You haven't installed any unlock kernel yet. This software currently supports three kernels, please choose:",
+        "auto_download": "Auto Download",
+        "manual_download": "Manual Download",
+        "force_kernel_select": "If installed but not recognized, you can force select kernel here:",
+        "force_apply": "Force Apply",
+        "ost_desc": "OpenSteamTools (Recommended)",
+        "st_desc": "SteamTools",
+        "gl_desc": "GreenLuma (Not Recommended)",
+        
+        # Version Mode Settings
+        "st_settings": "Version Mode Settings",
+        "st_settings_hint": "Control file version management mode (Auto Update/Fixed Version)",
+        "st_fixed_enable": "Fixed Version",
+        "st_fixed_tooltip": "New files will use fixed version mode by default",
+        "manifest_patch_source": "Manifest Patch Source",
+        "manifest_patch_source_hint": "Used for auto-completing missing manifests in fixed version mode",
+        "patch_source_default": "Default (Steam.run/GitHub)",
+        "patch_source_gmrc": "GMRC",
+        "patch_source_buqiuren": "BuQiuRen",
+        
+        # Common
+        "success": "Success",
+        "failed": "Failed",
+        "install_success": "installed successfully, please restart the software!",
+        "download_failed": "Download failed",
+        "launch_failed": "Launch failed",
+        "save_failed": "Save failed",
     },
     "zh_TW": {
         "app_title": "流暢入库",
@@ -1194,6 +891,9 @@ TEXTS = {
         "add_all_dlc": "加入所有 DLC",
         "patch_depot_key": "修補 Depot Key",
         "patch_manifest": "修補 Manifest",
+        "download_lua_only": "僅下載 Lua",
+        "download_dlc_manifests": "下載 DLC 清單",
+        "download_all_manifests": "下載所有清單 (Lua + DLC)",
         "manifest_source": "清單來源:",
         "view_mode": "檢視模式",
         "sort_mode": "排序",
@@ -1221,6 +921,8 @@ TEXTS = {
         "theme_color_changed": "主題顏色已變更為 {0}\n\n是否立即重新啟動應用以套用變更？",
         "restart_steam_confirm": "重新啟動 Steam",
         "restart_steam_message": "確定要重新啟動 Steam 嗎？\n\n這將關閉目前執行中的 Steam 並重新啟動。",
+        "restart_steam_select_account": "選擇要切換的帳號（可選）：",
+        "restart_steam_no_switch": "不切換帳號，僅重新啟動",
         "total_games": "共 {0} 個遊戲 | SteamTools: {1} | GreenLuma: {2}",
         "load_failed": "載入失敗: {0}",
         "reset_settings": "重設設定",
@@ -1246,6 +948,7 @@ TEXTS = {
         "auto_detect": "自動偵測",
         "force_steamtools": "強制 SteamTools",
         "force_greenluma": "強制 GreenLuma",
+        "force_opensteamtools": "強制 OpenSteamTools",
         "force_unlocker_hint": "強制使用指定的解鎖工具",
         "download_timeout": "入库逾時時間",
         "download_timeout_hint": "下載清單的逾時時間（秒），網路較慢時可適度增加",
@@ -1258,6 +961,8 @@ TEXTS = {
         "effect_mica": "雲母 (Win11)",
         "effect_acrylic": "壓克力 (Win10+)",
         "effect_aero": "Aero 毛玻璃",
+        "smooth_scroll": "平滑捲動",
+        "smooth_scroll_hint": "啟用頁面平滑捲動效果（關閉可減少卡頓）",
         "light_theme": "淺色",
         "dark_theme": "深色",
         "follow_system": "跟隨系統",
@@ -1272,10 +977,12 @@ TEXTS = {
         "auto_search_github": "自動搜尋GitHub",
         "swa_v2": "SWA V2",
         "walftech": "Walftech",
-        "steamautocracks_v2": "SteamAutoCracks V2 (僅金鑰)",
-        "sudama": "Sudama 資料庫 (僅金鑰)",
+        "steamautocracks_v2": "SteamAutoCracks V2 (僅金鑰) [已廢棄]",
+        "sudama": "Sudama 資料庫 (僅金鑰) [推薦]",
         "buqiuren": "清單不求人資料庫 (僅清單)",
+        "gmrc": "GMRC (僅清單)",
         "github_auiowu": "GitHub (Auiowu)",
+        "github_mau": "GitHub (MAU)",
         "check_update": "檢查更新",
         "checking": "檢查中...",
         "update_available": "發現新版本",
@@ -1288,6 +995,42 @@ TEXTS = {
         "check_update_failed": "檢查更新失敗",
         "restart_steam_title": "重新啟動 Steam",
         "restart_steam_confirm_message": "確定要重新啟動 Steam 嗎？\n\n這將關閉目前執行中的 Steam 並重新啟動。",
+        "drm_page_title": "D加密授權器",
+        "drm_step1": "步驟 1：取得授權檔案",
+        "drm_cw_file": "CW 檔案",
+        "drm_cw_file_hint": "選擇本機 .cw 授權檔案並解密",
+        "drm_cw_placeholder": "選擇 .cw 授權檔案",
+        "drm_browse": "瀏覽",
+        "drm_decrypt": "解密",
+        "drm_auth_code": "授權碼",
+        "drm_auth_code_hint": "透過授權碼線上取得 CW 檔案",
+        "drm_auth_code_placeholder": "輸入授權碼",
+        "drm_download_decrypt": "下載並解密",
+        "drm_online_auth": "線上取得授權",
+        "drm_online_auth_hint": "造訪外部授權網站",
+        "drm_extract_title": "取得 CW 檔案（本機提取）",
+        "drm_extract_hint": "需要已登入 Steam 且擁有該遊戲",
+        "drm_extract_placeholder": "輸入遊戲 AppID（目前帳號必須擁有該遊戲）",
+        "drm_gen_authcode": "產生授權碼",
+        "drm_extract_cw": "本機提取 CW",
+        "drm_info_title": "授權資訊",
+        "drm_valid_from": "生效時間",
+        "drm_valid_to": "失效時間",
+        "drm_step2": "步驟 2：GL 模式授權（SteamTools）",
+        "drm_gl_hint": "將授權 ticket 寫入 SteamTools 目錄",
+        "drm_gl_btn": "開始授權 (GL/SteamTools)",
+        "drm_log": "紀錄",
+        "drm_nav": "D加密",
+        "drm_tip_select_cw": "請先選擇 CW 檔案",
+        "drm_tip_enter_code": "請輸入授權碼",
+        "drm_tip_decrypt_first": "請先解密 CW 檔案",
+        "drm_tip_valid_appid": "請輸入有效的 AppID",
+        "drm_missing_dep": "缺少依賴",
+        "drm_missing_dep_hint": "請安裝 pycryptodome: pip install pycryptodome",
+        "drm_decrypt_failed": "解密失敗",
+        "drm_download_failed": "下載失敗",
+        "drm_auth_success": "授權成功",
+        "drm_auth_failed": "授權失敗",
         
         # 缺失的翻譯鍵
         "settings_log_title": "日誌",
@@ -1338,6 +1081,12 @@ TEXTS = {
         "st_fixed_manifest_always": "始終",
         "st_fixed_manifest_never": "從不",
         "st_fixed_manifest_ask": "詢問",
+        "patch_manifest_mode": "修補 Manifest",
+        "patch_manifest_mode_hint": "入库後自動補全缺失的清單檔案",
+        "patch_manifest_always": "始終",
+        "patch_manifest_never": "從不",
+        "patch_manifest_ask": "詢問",
+        "patch_manifest_ask_hint": "是否補全缺失的清單檔案？",
         "dlc_timeout": "DLC 聯網超時時間",
         "dlc_timeout_hint": "獲取DLC列表超時時間，網路較差時可適當調大（秒）",
         "show_progress_bar": "顯示進度條",
@@ -1349,8 +1098,40 @@ TEXTS = {
         "hide_launcher_hint": "隱藏側欄中的連線遊戲選項",
         "hide_trainer": "隱藏修改器",
         "hide_trainer_hint": "隱藏側欄中的修改器選項",
+        "hide_drm": "隱藏D加密",
+        "hide_drm_hint": "隱藏側欄中的D加密選項",
         "name_not_found": "名稱未找到",
         "fetch_failed": "獲取失敗",
+        
+        # 内核检测相关
+        "no_kernel_title": "未檢測到解鎖內核",
+        "no_kernel_msg": "您還沒有安裝任何解鎖內核，本軟件目前支持以下三種內核，請您選擇：",
+        "auto_download": "自動下載",
+        "manual_download": "手動下載",
+        "force_kernel_select": "如果您已安裝但未正確識別，可在此強制選擇內核：",
+        "force_apply": "強制使用",
+        "ost_desc": "OpenSteamTools (推薦)",
+        "st_desc": "SteamTools",
+        "gl_desc": "GreenLuma (不推薦)",
+        
+        # 版本模式设置
+        "st_settings": "版本模式設置",
+        "st_settings_hint": "控制文件的版本管理模式（自動更新/固定版本）",
+        "st_fixed_enable": "固定版本",
+        "st_fixed_tooltip": "新添加的文件默認使用固定版本模式",
+        "manifest_patch_source": "Manifest 修補庫",
+        "manifest_patch_source_hint": "用於固定版本模式缺失清單時的自動補全源",
+        "patch_source_default": "默認 (Steam.run/GitHub)",
+        "patch_source_gmrc": "GMRC",
+        "patch_source_buqiuren": "清單不求人",
+        
+        # 通用
+        "success": "成功",
+        "failed": "失敗",
+        "install_success": "安裝成功，請重啟軟件！",
+        "download_failed": "下載失敗",
+        "launch_failed": "啟動失敗",
+        "save_failed": "保存失敗",
     },
 }
 
@@ -1380,14 +1161,23 @@ _LAUNCHER_TEXTS = {
         "launcher_bat_done": "BAT 脚本已生成并启动",
         "launcher_error": "启动失败",
         "launcher_install_hint": "安装 Spacewar (AppID 480)",
-        # 两种联机模式
+        # 三种联机模式
         "launcher_mode_label": "联机方式",
         "launcher_mode_dll": "DLL 注入联机 (推荐)",
         "launcher_mode_bat": "BAT 脚本注入联机",
+        "launcher_mode_changer": "AppID Changer 联机",
         "launcher_mode_dll_desc": "扫描 Steam 库中的 steam_api.dll，加载后初始化 Steam API，再启动游戏。兼容性最佳。",
         "launcher_mode_bat_desc": "在游戏目录生成 BAT 脚本，通过环境变量注入 AppID 启动游戏。简单快速。",
+        "launcher_mode_changer_desc": "直接修改游戏目录下的 steam_appid.txt 文件启动游戏，游戏关闭后自动恢复原 AppID。适用于大多数 Steam 游戏。",
         "launcher_bat_start": "生成脚本并启动",
+        "launcher_changer_start": "修改 AppID 并启动",
         "launcher_mode_select": "选择联机方式",
+        "launcher_changer_no_appid_txt": "游戏目录下未找到 steam_appid.txt 文件",
+        "launcher_changer_backup_failed": "备份原始 AppID 失败",
+        "launcher_changer_write_failed": "写入新 AppID 失败",
+        "launcher_changer_launch_failed": "启动游戏失败",
+        "launcher_changer_success": "AppID 修改成功，游戏已启动",
+        "launcher_changer_restored": "原始 AppID 已恢复",
         "settings_log_title": "运行日志",
         "settings_clear_log": "清空日志",
     },
@@ -1418,10 +1208,19 @@ _LAUNCHER_TEXTS = {
         "launcher_mode_label": "Launch Mode",
         "launcher_mode_dll": "DLL Injection (Recommended)",
         "launcher_mode_bat": "BAT Script Injection",
+        "launcher_mode_changer": "AppID Changer",
         "launcher_mode_dll_desc": "Scans Steam library for steam_api.dll, loads it to initialize Steam API, then launches the game. Best compatibility.",
         "launcher_mode_bat_desc": "Generates a BAT script in the game directory to inject AppID via environment variables. Simple and fast.",
+        "launcher_mode_changer_desc": "Directly modifies the steam_appid.txt file in the game directory to launch the game, automatically restores the original AppID after the game closes. Suitable for most Steam games.",
         "launcher_bat_start": "Generate Script & Launch",
+        "launcher_changer_start": "Change AppID & Launch",
         "launcher_mode_select": "Select Launch Mode",
+        "launcher_changer_no_appid_txt": "steam_appid.txt not found in game directory",
+        "launcher_changer_backup_failed": "Failed to backup original AppID",
+        "launcher_changer_write_failed": "Failed to write new AppID",
+        "launcher_changer_launch_failed": "Failed to launch game",
+        "launcher_changer_success": "AppID changed successfully, game launched",
+        "launcher_changer_restored": "Original AppID restored",
         "settings_log_title": "Runtime Log",
         "settings_clear_log": "Clear Log",
     },
@@ -1432,12 +1231,41 @@ _LAUNCHER_TEXTS = {
         "launcher_status_running": "服務運行中",
         "launcher_game_exe": "遊戲可執行檔",
         "launcher_browse": "瀏覽",
-        "launcher_app_id": "協議ID (AppID)",
-        "launcher_app_id_hint": "預設為480 (太空戰)，可更改为實際遊戲AppID",
-        "launcher_start": "啟動服務並啟動遊戲",
+        "launcher_app_id": "協議 ID (AppID)",
+        "launcher_app_id_hint": "預設為 480 (Spacewar)，可更改為實際遊戲 AppID",
+        "launcher_start": "啟動服務並執行遊戲",
         "launcher_stop": "停止服務",
-        "launcher_log": "運行時日誌",
+        "launcher_log": "執行日誌",
         "launcher_clear_log": "清除日誌",
+        "launcher_method_a": "方法A：設為 3170150（中文環境推薦）",
+        "launcher_method_b": "方法B：強改 480 中文版（殺程序）",
+        "launcher_method_c": "方法C：BAT 指令碼注入啟動",
+        "launcher_find_patch": "尋找多人遊戲修正檔（外部網站）",
+        "launcher_no_exe": "請先選擇遊戲 .exe 檔案",
+        "launcher_service_started": "服務已啟動",
+        "launcher_service_stopped": "服務已停止",
+        "launcher_cn_fix_done": "協議 ID 已設為 3170150",
+        "launcher_bat_done": "BAT 指令碼已生成並啟動",
+        "launcher_error": "啟動失敗",
+        "launcher_install_hint": "安裝 Spacewar (AppID 480)",
+        "launcher_mode_label": "多人遊戲方式",
+        "launcher_mode_dll": "DLL 注入多人遊戲（推薦）",
+        "launcher_mode_bat": "BAT 指令碼注入多人遊戲",
+        "launcher_mode_changer": "AppID 變更器多人遊戲",
+        "launcher_mode_dll_desc": "掃描 Steam 資料庫中的 steam_api.dll，載入後初始化 Steam API，再啟動遊戲。相容性最佳。",
+        "launcher_mode_bat_desc": "在遊戲目錄生成 BAT 指令碼，透過環境變數注入 AppID 啟動遊戲。簡單快速。",
+        "launcher_mode_changer_desc": "直接修改遊戲目錄下的 steam_appid.txt 檔案啟動遊戲，遊戲關閉後自動恢復原始 AppID。適用於大多數 Steam 遊戲。",
+        "launcher_bat_start": "生成指令碼並啟動",
+        "launcher_changer_start": "修改 AppID 並啟動",
+        "launcher_mode_select": "選擇多人遊戲方式",
+        "launcher_changer_no_appid_txt": "遊戲目錄下未找到 steam_appid.txt 檔案",
+        "launcher_changer_backup_failed": "備份原始 AppID 失敗",
+        "launcher_changer_write_failed": "寫入新 AppID 失敗",
+        "launcher_changer_launch_failed": "啟動遊戲失敗",
+        "launcher_changer_success": "AppID 修改成功，遊戲已啟動",
+        "launcher_changer_restored": "原始 AppID 已恢復",
+        "settings_log_title": "執行日誌",
+        "settings_clear_log": "清除日誌",
     }
 
 }
@@ -1465,6 +1293,13 @@ _EXTRA_TEXTS = {
         "recommendations_failed": "Failed to load recommendations",
         "show_more": "Show More",
     },
+    "zh_TW": {
+        "recommended_games": "熱門遊戲推薦",
+        "recommended_hint": "以下為 Steam 熱門遊戲，點擊可直接入庫",
+        "loading_recommendations": "正在載入推薦...",
+        "recommendations_failed": "載入推薦失敗",
+        "show_more": "顯示更多",
+    },
 }
 for _lang, _keys in _EXTRA_TEXTS.items():
     if _lang in TEXTS:
@@ -1472,6 +1307,148 @@ for _lang, _keys in _EXTRA_TEXTS.items():
 for _lang in TEXTS:
     if _lang not in _EXTRA_TEXTS:
         TEXTS[_lang].update(_EXTRA_TEXTS["zh_CN"])
+
+# ===== 游戏详情页翻译键 =====
+_DETAIL_TEXTS = {
+    "zh_CN": {
+        "detail_loading": "加载中...",
+        "detail_developer": "开发商",
+        "detail_publisher": "发行商",
+        "detail_release_date": "发布日期",
+        "detail_unknown": "未知",
+        "detail_coming_soon": "即将推出",
+        "detail_free": "免费开玩",
+        "detail_price_unavailable": "价格信息不可用",
+        "detail_platform": "平台",
+        "detail_screenshots": "游戏截图",
+        "detail_about": "关于游戏",
+        "detail_no_description": "暂无描述",
+        "detail_system_requirements": "系统需求",
+        "detail_min_requirements": "最低配置",
+        "detail_rec_requirements": "推荐配置",
+        "detail_no_requirements": "暂无系统需求信息",
+        "detail_no_screenshots": "暂无截图",
+        "detail_prev": "上一张",
+        "detail_next": "下一张",
+        "detail_close": "关闭",
+        "detail_view_store": "在 Steam 商店查看",
+        "detail_add_to_library": "入库",
+        "detail_switch_auto": "切换为自动更新",
+        "detail_switch_fixed": "切换为固定版本",
+        "detail_delete": "删除",
+        "detail_copy_appid": "复制 AppID",
+        "detail_view_store_page": "查看商店页面",
+        "detail_view_steamdb": "查看 SteamDB",
+        "detail_view_detail": "查看详情",
+        "detail_add_started": "开始入库",
+        "detail_add_progress": "{0} 已开始入库",
+        "detail_add_failed": "入库失败",
+        "detail_add_failed_msg": "无法找到入库入口，请从搜索页面入库",
+        "detail_switch_failed": "切换失败",
+        "detail_switch_failed_msg": "无法找到切换版本入口",
+        "detail_delete_failed": "删除失败",
+        "detail_delete_failed_msg": "无法找到删除入口",
+        "copy": "复制",
+        "copy_cover": "复制封面",
+        "copy_game_name": "复制游戏名称",
+        "cover_unavailable": "此游戏暂时获取不到封面",
+        "game_name_unavailable": "此游戏暂时获取不到游戏名",
+    },
+    "en_US": {
+        "detail_loading": "Loading...",
+        "detail_developer": "Developer",
+        "detail_publisher": "Publisher",
+        "detail_release_date": "Release Date",
+        "detail_unknown": "Unknown",
+        "detail_coming_soon": "Coming Soon",
+        "detail_free": "Free to Play",
+        "detail_price_unavailable": "Price unavailable",
+        "detail_platform": "Platform",
+        "detail_screenshots": "Screenshots",
+        "detail_about": "About This Game",
+        "detail_no_description": "No description available",
+        "detail_system_requirements": "System Requirements",
+        "detail_min_requirements": "Minimum",
+        "detail_rec_requirements": "Recommended",
+        "detail_no_requirements": "No system requirements available",
+        "detail_no_screenshots": "No screenshots",
+        "detail_prev": "Previous",
+        "detail_next": "Next",
+        "detail_close": "Close",
+        "detail_view_store": "View on Steam Store",
+        "detail_add_to_library": "Add to Library",
+        "detail_switch_auto": "Switch to Auto Update",
+        "detail_switch_fixed": "Switch to Fixed Version",
+        "detail_delete": "Delete",
+        "detail_copy_appid": "Copy AppID",
+        "detail_view_store_page": "View Store Page",
+        "detail_view_steamdb": "View SteamDB",
+        "detail_view_detail": "View Details",
+        "detail_add_started": "Adding to Library",
+        "detail_add_progress": "{0} is being added to library",
+        "detail_add_failed": "Add Failed",
+        "detail_add_failed_msg": "Cannot find library entry, please add from search page",
+        "detail_switch_failed": "Switch Failed",
+        "detail_switch_failed_msg": "Cannot find version switch entry",
+        "detail_delete_failed": "Delete Failed",
+        "detail_delete_failed_msg": "Cannot find delete entry",
+        "copy": "Copy",
+        "copy_cover": "Copy Cover",
+        "copy_game_name": "Copy Game Name",
+        "cover_unavailable": "Cover image not available for this game",
+        "game_name_unavailable": "Game name not available",
+    },
+    "zh_TW": {
+        "detail_loading": "載入中...",
+        "detail_developer": "開發商",
+        "detail_publisher": "發行商",
+        "detail_release_date": "發布日期",
+        "detail_unknown": "未知",
+        "detail_coming_soon": "即將推出",
+        "detail_free": "免費開玩",
+        "detail_price_unavailable": "價格資訊不可用",
+        "detail_platform": "平台",
+        "detail_screenshots": "遊戲截圖",
+        "detail_about": "關於此遊戲",
+        "detail_no_description": "暫無描述",
+        "detail_system_requirements": "系統需求",
+        "detail_min_requirements": "最低配置",
+        "detail_rec_requirements": "推薦配置",
+        "detail_no_requirements": "暫無系統需求資訊",
+        "detail_no_screenshots": "暫無截圖",
+        "detail_prev": "上一張",
+        "detail_next": "下一張",
+        "detail_close": "關閉",
+        "detail_view_store": "在 Steam 商店查看",
+        "detail_add_to_library": "入庫",
+        "detail_switch_auto": "切換為自動更新",
+        "detail_switch_fixed": "切換為固定版本",
+        "detail_delete": "刪除",
+        "detail_copy_appid": "複製 AppID",
+        "detail_view_store_page": "查看商店頁面",
+        "detail_view_steamdb": "查看 SteamDB",
+        "detail_view_detail": "查看詳情",
+        "detail_add_started": "開始入庫",
+        "detail_add_progress": "{0} 已開始入庫",
+        "detail_add_failed": "入庫失敗",
+        "detail_add_failed_msg": "無法找到入庫入口，請從搜尋頁面入庫",
+        "detail_switch_failed": "切換失敗",
+        "detail_switch_failed_msg": "無法找到切換版本入口",
+        "detail_delete_failed": "刪除失敗",
+        "detail_delete_failed_msg": "無法找到刪除入口",
+        "copy": "複製",
+        "copy_cover": "複製封面",
+        "copy_game_name": "複製遊戲名稱",
+        "cover_unavailable": "此遊戲暫時獲取不到封面",
+        "game_name_unavailable": "此遊戲暫時獲取不到遊戲名",
+    },
+}
+for _lang, _keys in _DETAIL_TEXTS.items():
+    if _lang in TEXTS:
+        TEXTS[_lang].update(_keys)
+for _lang in TEXTS:
+    if _lang not in _DETAIL_TEXTS:
+        TEXTS[_lang].update(_DETAIL_TEXTS["zh_CN"])
 
 # ===== 修改器页面翻译键 =====
 _TRAINER_TEXTS = {
@@ -1539,134 +1516,6 @@ _TRAINER_TEXTS = {
         "trainer_open_gcm": "Open GCM",
         "trainer_progress": "Download Progress",
     },
-    "ja_JP": {
-        "trainer_nav": "トレーナー",
-        "trainer_title": "ゲームトレーナー",
-        "trainer_search_placeholder": "トレーナーを検索（ゲーム名）...",
-        "trainer_search_btn": "検索",
-        "trainer_installed_title": "インストール済みトレーナー",
-        "trainer_search_results": "検索結果",
-        "trainer_download_btn": "ダウンロード",
-        "trainer_launch_btn": "起動",
-        "trainer_delete_btn": "削除",
-        "trainer_refresh_btn": "更新",
-        "trainer_open_folder": "フォルダを開く",
-        "trainer_no_installed": "インストール済みトレーナーはありません",
-        "trainer_no_results": "トレーナーが見つかりません",
-        "trainer_searching": "検索中...",
-        "trainer_downloading": "ダウンロード中...",
-        "trainer_download_success": "ダウンロード成功",
-        "trainer_download_failed": "ダウンロード失敗",
-        "trainer_launch_failed": "起動失敗",
-        "trainer_delete_confirm": "削除の確認",
-        "trainer_delete_confirm_msg": "{0} を削除してもよろしいですか？",
-        "trainer_deleted": "削除しました",
-        "trainer_db_missing": "GCMデータベースが見つかりません",
-        "trainer_db_missing_hint": "トレーナーデータベースをダウンロードするには、Game Cheats Managerをインストールして実行するか、直接検索してください（インターネット接続が必要です）",
-        "trainer_version": "バージョン",
-        "trainer_source": "ソース",
-        "trainer_log": "操作ログ",
-        "trainer_clear_log": "ログをクリア",
-        "trainer_already_exists": "トレーナーは既に存在します",
-        "trainer_open_gcm": "GCMを開く",
-        "trainer_progress": "ダウンロード進捗",
-    },
-    "fr_FR": {
-        "trainer_nav": "Trainers",
-        "trainer_title": "Trainers de Jeu",
-        "trainer_search_placeholder": "Rechercher des trainers (nom du jeu)...",
-        "trainer_search_btn": "Rechercher",
-        "trainer_installed_title": "Trainers Installés",
-        "trainer_search_results": "Résultats de Recherche",
-        "trainer_download_btn": "Télécharger",
-        "trainer_launch_btn": "Lancer",
-        "trainer_delete_btn": "Supprimer",
-        "trainer_refresh_btn": "Actualiser",
-        "trainer_open_folder": "Ouvrir le Dossier",
-        "trainer_no_installed": "Aucun trainer installé",
-        "trainer_no_results": "Aucun trainer trouvé",
-        "trainer_searching": "Recherche en cours...",
-        "trainer_downloading": "Téléchargement en cours...",
-        "trainer_download_success": "Téléchargement réussi",
-        "trainer_download_failed": "Échec du téléchargement",
-        "trainer_launch_failed": "Échec du lancement",
-        "trainer_delete_confirm": "Confirmer la Suppression",
-        "trainer_delete_confirm_msg": "Êtes-vous sûr de vouloir supprimer {0} ?",
-        "trainer_deleted": "Supprimé",
-        "trainer_db_missing": "Base de Données GCM Introuvable",
-        "trainer_db_missing_hint": "Veuillez installer et exécuter Game Cheats Manager pour télécharger la base de données des trainers, ou recherchez directement (nécessite Internet)",
-        "trainer_version": "Version",
-        "trainer_source": "Source",
-        "trainer_log": "Journal des Opérations",
-        "trainer_clear_log": "Effacer le Journal",
-        "trainer_already_exists": "Le trainer existe déjà",
-        "trainer_open_gcm": "Ouvrir GCM",
-        "trainer_progress": "Progression du Téléchargement",
-    },
-    "ru_RU": {
-        "trainer_nav": "Трейнеры",
-        "trainer_title": "Игровые Трейнеры",
-        "trainer_search_placeholder": "Поиск трейнеров (название игры)...",
-        "trainer_search_btn": "Поиск",
-        "trainer_installed_title": "Установленные Трейнеры",
-        "trainer_search_results": "Результаты Поиска",
-        "trainer_download_btn": "Скачать",
-        "trainer_launch_btn": "Запустить",
-        "trainer_delete_btn": "Удалить",
-        "trainer_refresh_btn": "Обновить",
-        "trainer_open_folder": "Открыть Папку",
-        "trainer_no_installed": "Нет установленных трейнеров",
-        "trainer_no_results": "Трейнеры не найдены",
-        "trainer_searching": "Поиск...",
-        "trainer_downloading": "Загрузка...",
-        "trainer_download_success": "Загрузка успешна",
-        "trainer_download_failed": "Ошибка загрузки",
-        "trainer_launch_failed": "Ошибка запуска",
-        "trainer_delete_confirm": "Подтвердить Удаление",
-        "trainer_delete_confirm_msg": "Вы уверены, что хотите удалить {0}?",
-        "trainer_deleted": "Удалено",
-        "trainer_db_missing": "База Данных GCM Не Найдена",
-        "trainer_db_missing_hint": "Пожалуйста, установите и запустите Game Cheats Manager для загрузки базы данных трейнеров, или выполните прямой поиск (требуется интернет)",
-        "trainer_version": "Версия",
-        "trainer_source": "Источник",
-        "trainer_log": "Журнал Операций",
-        "trainer_clear_log": "Очистить Журнал",
-        "trainer_already_exists": "Трейнер уже существует",
-        "trainer_open_gcm": "Открыть GCM",
-        "trainer_progress": "Прогресс Загрузки",
-    },
-    "de_DE": {
-        "trainer_nav": "Trainer",
-        "trainer_title": "Spiel-Trainer",
-        "trainer_search_placeholder": "Trainer suchen (Spielname)...",
-        "trainer_search_btn": "Suchen",
-        "trainer_installed_title": "Installierte Trainer",
-        "trainer_search_results": "Suchergebnisse",
-        "trainer_download_btn": "Herunterladen",
-        "trainer_launch_btn": "Starten",
-        "trainer_delete_btn": "Löschen",
-        "trainer_refresh_btn": "Aktualisieren",
-        "trainer_open_folder": "Ordner Öffnen",
-        "trainer_no_installed": "Keine Trainer installiert",
-        "trainer_no_results": "Keine Trainer gefunden",
-        "trainer_searching": "Suche läuft...",
-        "trainer_downloading": "Wird heruntergeladen...",
-        "trainer_download_success": "Download erfolgreich",
-        "trainer_download_failed": "Download fehlgeschlagen",
-        "trainer_launch_failed": "Start fehlgeschlagen",
-        "trainer_delete_confirm": "Löschen Bestätigen",
-        "trainer_delete_confirm_msg": "Sind Sie sicher, dass Sie {0} löschen möchten?",
-        "trainer_deleted": "Gelöscht",
-        "trainer_db_missing": "GCM-Datenbank Nicht Gefunden",
-        "trainer_db_missing_hint": "Bitte installieren und starten Sie Game Cheats Manager, um die Trainer-Datenbank herunterzuladen, oder suchen Sie direkt (Internet erforderlich)",
-        "trainer_version": "Version",
-        "trainer_source": "Quelle",
-        "trainer_log": "Betriebsprotokoll",
-        "trainer_clear_log": "Protokoll Löschen",
-        "trainer_already_exists": "Trainer existiert bereits",
-        "trainer_open_gcm": "GCM Öffnen",
-        "trainer_progress": "Download-Fortschritt",
-    },
     "zh_TW": {
         "trainer_nav": "修改器",
         "trainer_title": "遊戲修改器",
@@ -1680,7 +1529,7 @@ _TRAINER_TEXTS = {
         "trainer_refresh_btn": "重新整理",
         "trainer_open_folder": "開啟目錄",
         "trainer_no_installed": "暫無已安裝的修改器",
-        "trainer_no_results": "未找到相關修改器",
+        "trainer_no_results": "未找到相關修改器（請關閉梯子重啟後試試）",
         "trainer_searching": "正在搜尋...",
         "trainer_downloading": "正在下載...",
         "trainer_download_success": "下載成功",
@@ -1698,70 +1547,6 @@ _TRAINER_TEXTS = {
         "trainer_already_exists": "修改器已存在",
         "trainer_open_gcm": "開啟 GCM",
         "trainer_progress": "下載進度",
-    },
-    "es_ES": {
-        "trainer_nav": "Trainers",
-        "trainer_title": "Trainers de Juegos",
-        "trainer_search_placeholder": "Buscar trainers (nombre del juego)...",
-        "trainer_search_btn": "Buscar",
-        "trainer_installed_title": "Trainers Instalados",
-        "trainer_search_results": "Resultados de Búsqueda",
-        "trainer_download_btn": "Descargar",
-        "trainer_launch_btn": "Iniciar",
-        "trainer_delete_btn": "Eliminar",
-        "trainer_refresh_btn": "Actualizar",
-        "trainer_open_folder": "Abrir Carpeta",
-        "trainer_no_installed": "No hay trainers instalados",
-        "trainer_no_results": "No se encontraron trainers",
-        "trainer_searching": "Buscando...",
-        "trainer_downloading": "Descargando...",
-        "trainer_download_success": "Descarga exitosa",
-        "trainer_download_failed": "Descarga fallida",
-        "trainer_launch_failed": "Inicio fallido",
-        "trainer_delete_confirm": "Confirmar Eliminación",
-        "trainer_delete_confirm_msg": "¿Estás seguro de que deseas eliminar {0}?",
-        "trainer_deleted": "Eliminado",
-        "trainer_db_missing": "Base de Datos GCM No Encontrada",
-        "trainer_db_missing_hint": "Por favor instala y ejecuta Game Cheats Manager para descargar la base de datos de trainers, o busca directamente (requiere internet)",
-        "trainer_version": "Versión",
-        "trainer_source": "Fuente",
-        "trainer_log": "Registro de Operaciones",
-        "trainer_clear_log": "Borrar Registro",
-        "trainer_already_exists": "El trainer ya existe",
-        "trainer_open_gcm": "Abrir GCM",
-        "trainer_progress": "Progreso de Descarga",
-    },
-    "ko_KR": {
-        "trainer_nav": "트레이너",
-        "trainer_title": "게임 트레이너",
-        "trainer_search_placeholder": "트레이너 검색 (게임 이름)...",
-        "trainer_search_btn": "검색",
-        "trainer_installed_title": "설치된 트레이너",
-        "trainer_search_results": "검색 결과",
-        "trainer_download_btn": "다운로드",
-        "trainer_launch_btn": "실행",
-        "trainer_delete_btn": "삭제",
-        "trainer_refresh_btn": "새로고침",
-        "trainer_open_folder": "폴더 열기",
-        "trainer_no_installed": "설치된 트레이너가 없습니다",
-        "trainer_no_results": "트레이너를 찾을 수 없습니다",
-        "trainer_searching": "검색 중...",
-        "trainer_downloading": "다운로드 중...",
-        "trainer_download_success": "다운로드 성공",
-        "trainer_download_failed": "다운로드 실패",
-        "trainer_launch_failed": "실행 실패",
-        "trainer_delete_confirm": "삭제 확인",
-        "trainer_delete_confirm_msg": "{0}을(를) 삭제하시겠습니까?",
-        "trainer_deleted": "삭제됨",
-        "trainer_db_missing": "GCM 데이터베이스를 찾을 수 없음",
-        "trainer_db_missing_hint": "트레이너 데이터베이스를 다운로드하려면 Game Cheats Manager를 설치하고 실행하거나, 직접 검색하세요 (인터넷 필요)",
-        "trainer_version": "버전",
-        "trainer_source": "출처",
-        "trainer_log": "작업 로그",
-        "trainer_clear_log": "로그 지우기",
-        "trainer_already_exists": "트레이너가 이미 존재합니다",
-        "trainer_open_gcm": "GCM 열기",
-        "trainer_progress": "다운로드 진행률",
     },
 }
 for _lang, _keys in _TRAINER_TEXTS.items():
@@ -1815,18 +1600,19 @@ class SafeFlowLayout(FlowLayout):
 
 class GameCard(CardWidget):
     """游戏卡片组件"""
-    
+
     def __init__(self, appid, game_name, source_type, parent=None, mode="auto"):
         super().__init__(parent)
         self.appid = appid
         self.game_name = game_name
         self.source_type = source_type  # 'st' 或 'gl'
         self.mode = mode  # 'auto' 或 'fixed'
-        
-        # 网络管理器（先初始化）
-        self.network_manager = QNetworkAccessManager(self)
-        self.network_manager.finished.connect(self.on_cover_loaded)
-        
+        self.cover_loaded = False  # 封面是否已加载
+
+        # 设置右键菜单
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._show_context_menu)
+
         # 创建布局
         self.hBoxLayout = QHBoxLayout(self)
         self.vBoxLayout = QVBoxLayout()
@@ -1839,6 +1625,9 @@ class GameCard(CardWidget):
         self.coverLabel.setStyleSheet("border-radius: 4px; background: #2a2a2a;")
         # 监听主题变化
         self.theme_changed()
+        # 设置封面可点击，点击打开游戏详情
+        self.coverLabel.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.coverLabel.mousePressEvent = lambda e: self.show_game_detail()
         
         # 游戏标题
         # 如果游戏名称为空或显示为"名称未找到"等，显示AppID
@@ -1849,7 +1638,7 @@ class GameCard(CardWidget):
         self.titleLabel.setWordWrap(False)
         
         # AppID 和来源
-        source_text = "SteamTools" if source_type == "st" else "GreenLuma"
+        source_text = "SteamTools / OST" if source_type == "st" else "GreenLuma"
         self.infoLabel = CaptionLabel(f"AppID: {appid} | {source_text}", self)
         self.infoLabel.setTextColor("#606060", "#d2d2d2")
         
@@ -1866,8 +1655,8 @@ class GameCard(CardWidget):
         self.moreButton.setFixedSize(32, 32)
         self.moreButton.setToolTip("更多")
         self.moreButton.installEventFilter(ToolTipFilter(self.moreButton, showDelay=150, position=ToolTipPosition.TOP))
-        self.moreButton.clicked.connect(self._show_more_menu)
-        
+        self.moreButton.clicked.connect(lambda: self._show_more_menu())
+
         # 版本切换按钮（仅SteamTools）
         self.toggleButton = None
         if source_type == "st":
@@ -1897,36 +1686,75 @@ class GameCard(CardWidget):
         if self.toggleButton:
             self.hBoxLayout.addWidget(self.toggleButton, 0, Qt.AlignmentFlag.AlignRight)
         self.hBoxLayout.addWidget(self.moreButton, 0, Qt.AlignmentFlag.AlignRight)
-        
-        # 加载封面（最后执行）
-        self.load_cover()
     
     def theme_changed(self):
         """主题变化时更新样式"""
         if isDarkTheme():
             self.coverLabel.setStyleSheet("border-radius: 4px; background: #2a2a2a;")
+            self.setStyleSheet("GameCard { background-color: #2b2b2b; border: none; }")
         else:
             self.coverLabel.setStyleSheet("border-radius: 4px; background: #f0f0f0;")
-        
-        # 强制刷新卡片
-        self.update()
-        self.repaint()
+            self.setStyleSheet("GameCard { background-color: #ffffff; border: none; }")
     
-    def load_cover(self):
-        """加载游戏封面"""
-        # Steam 封面 URL
-        cover_url = f"https://cdn.akamai.steamstatic.com/steam/apps/{self.appid}/header.jpg"
-        request = QNetworkRequest(QUrl(cover_url))
-        self.network_manager.get(request)
+    def load_cover(self, network_manager=None):
+        """加载游戏封面（使用共享的网络管理器）"""
+        if self.cover_loaded:
+            return
+        
+        # 先检查缓存
+        cached_data = _get_cached_cover(self.appid)
+        if cached_data:
+            pixmap = QPixmap()
+            if pixmap.loadFromData(cached_data):
+                self.coverLabel.setPixmap(pixmap)
+                self.cover_loaded = True
+            return
+        
+        # 如果没有网络管理器，尝试从父页面获取
+        if network_manager is None:
+            parent = self.parent()
+            while parent:
+                if hasattr(parent, 'network_manager'):
+                    network_manager = parent.network_manager
+                    break
+                parent = parent.parent()
+        
+        if network_manager:
+            cover_url = f"https://cdn.akamai.steamstatic.com/steam/apps/{self.appid}/header.jpg"
+            request = QNetworkRequest(QUrl(cover_url))
+            reply = network_manager.get(request)
+            reply.finished.connect(lambda r=reply: self.on_cover_loaded(r))
+    
+    def set_cover_pixmap(self, pixmap):
+        """直接设置封面图片"""
+        if pixmap:
+            self.coverLabel.setPixmap(pixmap)
+            self.cover_loaded = True
     
     @pyqtSlot(QNetworkReply)
     def on_cover_loaded(self, reply):
         """封面加载完成"""
+        # 检查对象是否已被删除
+        try:
+            if not self.coverLabel or sip.isdeleted(self.coverLabel):
+                reply.deleteLater()
+                return
+        except:
+            reply.deleteLater()
+            return
+            
         if reply.error() == QNetworkReply.NetworkError.NoError:
             data = reply.readAll()
+            # 缓存封面数据
+            _cache_cover(self.appid, bytes(data))
             pixmap = QPixmap()
             if pixmap.loadFromData(data):
-                self.coverLabel.setPixmap(pixmap)
+                try:
+                    self.coverLabel.setPixmap(pixmap)
+                    self.cover_loaded = True
+                except RuntimeError:
+                    # 对象可能已被删除
+                    pass
         reply.deleteLater()
     
     def on_delete_clicked(self):
@@ -1936,8 +1764,10 @@ class GameCard(CardWidget):
             parent = self.parent()
             while parent and not isinstance(parent, HomePage):
                 parent = parent.parent()
-            if parent:
-                parent.delete_game(self.appid, self.source_type)
+            if parent and hasattr(parent, 'delete_game_with_confirm'):
+                # 获取游戏名称
+                game_name = getattr(self, 'game_name', None)
+                parent.delete_game_with_confirm(self.appid, self.source_type, game_name)
     
     def on_toggle_clicked(self):
         """版本切换按钮点击"""
@@ -1959,7 +1789,12 @@ class GameCard(CardWidget):
             else:
                 self.modeLabel.setText(tr("auto_update"))
                 self.modeLabel.setTextColor("#6ee7b7", "#6ee7b7")
-    
+
+    def show_game_detail(self):
+        """显示游戏详情对话框"""
+        dialog = GameDetailDialog(self.appid, self.game_name, self.window(), self.source_type, self.mode)
+        dialog.exec()
+
     def on_toggle_clicked(self):
         """版本切换按钮点击"""
         if self.parent():
@@ -2011,60 +1846,80 @@ class GameCard(CardWidget):
             duration=2000
         )
 
-    def _show_more_menu(self):
+    def _show_more_menu(self, pos=None):
         menu = RoundMenu(parent=self)
-        
+
+        # 查看详情
+        menu.addAction(Action(FluentIcon.INFO, tr("detail_view_detail"), triggered=self.show_game_detail))
+        menu.addSeparator()
+
         # 复制菜单（二级菜单）
         copy_menu = RoundMenu(parent=self)
         copy_menu.setTitle("复制")
         copy_menu.setIcon(FluentIcon.COPY)
-        
+
         # 复制封面
         copy_cover_action = Action(FluentIcon.PHOTO, "复制封面", triggered=self.copy_cover)
         if not self.coverLabel.pixmap():
             copy_cover_action.setEnabled(False)
             copy_cover_action.setToolTip("此游戏暂时获取不到封面")
         copy_menu.addAction(copy_cover_action)
-        
+
         # 复制AppID
-        copy_menu.addAction(Action(FluentIcon.CODE, "复制AppID", triggered=self.copy_appid))
-        
+        copy_menu.addAction(Action(FluentIcon.CODE, tr("detail_copy_appid"), triggered=self.copy_appid))
+
         # 复制游戏名称
         copy_name_action = Action(FluentIcon.TAG, "复制游戏名称", triggered=self.copy_game_name)
         if not self.game_name or self.game_name in ('名称未找到', '获取失败', tr('name_not_found'), tr('fetch_failed'), tr('unknown_game')):
             copy_name_action.setEnabled(False)
             copy_name_action.setToolTip("此游戏暂时获取不到游戏名")
         copy_menu.addAction(copy_name_action)
-        
+
         menu.addMenu(copy_menu)
         menu.addSeparator()
-        
-        menu.addAction(Action(FluentIcon.SHOPPING_CART, "查看商店页面", triggered=lambda: QDesktopServices.openUrl(QUrl(f"https://store.steampowered.com/app/{self.appid}"))))
-        menu.addAction(Action(FluentIcon.LINK, "查看 SteamDB", triggered=lambda: QDesktopServices.openUrl(QUrl(f"https://steamdb.info/app/{self.appid}"))))
+
+        menu.addAction(Action(FluentIcon.SHOPPING_CART, tr("detail_view_store_page"), triggered=lambda: QDesktopServices.openUrl(QUrl(f"https://store.steampowered.com/app/{self.appid}"))))
+        menu.addAction(Action(FluentIcon.LINK, tr("detail_view_steamdb"), triggered=lambda: QDesktopServices.openUrl(QUrl(f"https://steamdb.info/app/{self.appid}"))))
+
+        # SteamTools 游戏显示切换版本选项
+        if self.source_type == "st":
+            menu.addSeparator()
+            menu.addAction(Action(FluentIcon.UPDATE, tr("toggle_version_mode"), triggered=self.on_toggle_clicked))
+
         menu.addSeparator()
         menu.addAction(Action(FluentIcon.DELETE, tr("delete"), triggered=self.on_delete_clicked))
-        menu.exec(self.moreButton.mapToGlobal(self.moreButton.rect().bottomLeft()))
+
+        # 根据是否有pos参数决定菜单显示位置
+        if pos is not None:
+            menu.exec(self.mapToGlobal(pos))
+        else:
+            menu.exec(self.moreButton.mapToGlobal(self.moreButton.rect().bottomLeft()))
+
+    def _show_context_menu(self, pos):
+        """显示右键菜单"""
+        self._show_more_menu(pos)
 
 
 class GameCardGrid(CardWidget):
     """游戏卡片组件 - 网格视图模式"""
-    
+
     def __init__(self, appid, game_name, source_type, parent=None, mode="auto"):
         super().__init__(parent)
         self.appid = appid
         self.game_name = game_name
         self.source_type = source_type  # 'st' 或 'gl'
         self.mode = mode  # 'auto' 或 'fixed'
-        
-        # 网络管理器（先初始化）
-        self.network_manager = QNetworkAccessManager(self)
-        self.network_manager.finished.connect(self.on_cover_loaded)
-        
+        self.cover_loaded = False  # 封面是否已加载
+
+        # 设置右键菜单
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._show_context_menu)
+
         # 创建垂直布局
         self.vBoxLayout = QVBoxLayout(self)
         self.vBoxLayout.setContentsMargins(10, 10, 10, 10)
         self.vBoxLayout.setSpacing(8)
-        
+
         # 游戏封面
         self.coverLabel = QLabel(self)
         self.coverLabel.setFixedSize(180, 84)
@@ -2073,6 +1928,9 @@ class GameCardGrid(CardWidget):
         self.coverLabel.setStyleSheet("border-radius: 4px; background: #2a2a2a;")
         # 监听主题变化
         self.theme_changed()
+        # 设置封面可点击，点击打开游戏详情
+        self.coverLabel.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.coverLabel.mousePressEvent = lambda e: self.show_game_detail()
         
         # 游戏标题
         display_name = game_name
@@ -2085,7 +1943,7 @@ class GameCardGrid(CardWidget):
         self.titleLabel.setMaximumHeight(60)  # 大约3行文字
         
         # AppID 和来源
-        source_text = "SteamTools" if source_type == "st" else "GreenLuma"
+        source_text = "SteamTools / OST" if source_type == "st" else "GreenLuma"
         self.infoLabel = CaptionLabel(f"AppID: {appid} | {source_text}", self)
         self.infoLabel.setTextColor("#606060", "#d2d2d2")
         self.infoLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -2104,8 +1962,8 @@ class GameCardGrid(CardWidget):
         self.moreButton.setFixedSize(32, 32)
         self.moreButton.setToolTip("更多")
         self.moreButton.installEventFilter(ToolTipFilter(self.moreButton, showDelay=150, position=ToolTipPosition.TOP))
-        self.moreButton.clicked.connect(self._show_more_menu)
-        
+        self.moreButton.clicked.connect(lambda: self._show_more_menu())
+
         # 版本切换按钮（仅SteamTools）
         self.toggleButton = None
         if source_type == "st":
@@ -2135,32 +1993,75 @@ class GameCardGrid(CardWidget):
         btnLayout.addWidget(self.moreButton)
         self.vBoxLayout.addLayout(btnLayout)
         self.vBoxLayout.addSpacing(5)
-        
-        # 加载封面（最后执行）
-        self.load_cover()
     
     def theme_changed(self):
         """主题变化时更新样式"""
         if isDarkTheme():
             self.coverLabel.setStyleSheet("border-radius: 4px; background: #2a2a2a;")
+            self.setStyleSheet("GameCardGrid { background-color: #2b2b2b; border: none; }")
         else:
             self.coverLabel.setStyleSheet("border-radius: 4px; background: #f0f0f0;")
+            self.setStyleSheet("GameCardGrid { background-color: #ffffff; border: none; }")
+
+    def load_cover(self, network_manager=None):
+        """加载游戏封面（使用共享的网络管理器）"""
+        if self.cover_loaded:
+            return
+        
+        # 先检查缓存
+        cached_data = _get_cached_cover(self.appid)
+        if cached_data:
+            pixmap = QPixmap()
+            if pixmap.loadFromData(cached_data):
+                self.coverLabel.setPixmap(pixmap)
+                self.cover_loaded = True
+            return
+        
+        # 如果没有网络管理器，尝试从父页面获取
+        if network_manager is None:
+            parent = self.parent()
+            while parent:
+                if hasattr(parent, 'network_manager'):
+                    network_manager = parent.network_manager
+                    break
+                parent = parent.parent()
+        
+        if network_manager:
+            cover_url = f"https://cdn.akamai.steamstatic.com/steam/apps/{self.appid}/header.jpg"
+            request = QNetworkRequest(QUrl(cover_url))
+            reply = network_manager.get(request)
+            reply.finished.connect(lambda r=reply: self.on_cover_loaded(r))
     
-    def load_cover(self):
-        """加载游戏封面"""
-        # Steam 封面 URL
-        cover_url = f"https://cdn.akamai.steamstatic.com/steam/apps/{self.appid}/header.jpg"
-        request = QNetworkRequest(QUrl(cover_url))
-        self.network_manager.get(request)
+    def set_cover_pixmap(self, pixmap):
+        """直接设置封面图片"""
+        if pixmap:
+            self.coverLabel.setPixmap(pixmap)
+            self.cover_loaded = True
     
     @pyqtSlot(QNetworkReply)
     def on_cover_loaded(self, reply):
         """封面加载完成"""
+        # 检查对象是否已被删除
+        try:
+            if not self.coverLabel or sip.isdeleted(self.coverLabel):
+                reply.deleteLater()
+                return
+        except:
+            reply.deleteLater()
+            return
+            
         if reply.error() == QNetworkReply.NetworkError.NoError:
             data = reply.readAll()
+            # 缓存封面数据
+            _cache_cover(self.appid, bytes(data))
             pixmap = QPixmap()
             if pixmap.loadFromData(data):
-                self.coverLabel.setPixmap(pixmap)
+                try:
+                    self.coverLabel.setPixmap(pixmap)
+                    self.cover_loaded = True
+                except RuntimeError:
+                    # 对象可能已被删除
+                    pass
         reply.deleteLater()
     
     def on_delete_clicked(self):
@@ -2170,8 +2071,10 @@ class GameCardGrid(CardWidget):
             parent = self.parent()
             while parent and not isinstance(parent, HomePage):
                 parent = parent.parent()
-            if parent:
-                parent.delete_game(self.appid, self.source_type)
+            if parent and hasattr(parent, 'delete_game_with_confirm'):
+                # 获取游戏名称
+                game_name = getattr(self, 'game_name', None)
+                parent.delete_game_with_confirm(self.appid, self.source_type, game_name)
 
     def on_toggle_clicked(self):
         """版本切换按钮点击"""
@@ -2192,6 +2095,11 @@ class GameCardGrid(CardWidget):
             else:
                 self.modeLabel.setText(tr("auto_update"))
                 self.modeLabel.setTextColor("#6ee7b7", "#6ee7b7")
+
+    def show_game_detail(self):
+        """显示游戏详情对话框"""
+        dialog = GameDetailDialog(self.appid, self.game_name, self.window(), self.source_type, self.mode)
+        dialog.exec()
 
     def copy_cover(self):
         """复制封面URL到剪贴板"""
@@ -2233,39 +2141,58 @@ class GameCardGrid(CardWidget):
             duration=2000
         )
 
-    def _show_more_menu(self):
+    def _show_more_menu(self, pos=None):
         menu = RoundMenu(parent=self)
-        
+
+        # 查看详情
+        menu.addAction(Action(FluentIcon.INFO, tr("detail_view_detail"), triggered=self.show_game_detail))
+        menu.addSeparator()
+
         # 复制菜单（二级菜单）
         copy_menu = RoundMenu(parent=self)
         copy_menu.setTitle("复制")
         copy_menu.setIcon(FluentIcon.COPY)
-        
+
         # 复制封面
         copy_cover_action = Action(FluentIcon.PHOTO, "复制封面", triggered=self.copy_cover)
         if not self.coverLabel.pixmap():
             copy_cover_action.setEnabled(False)
             copy_cover_action.setToolTip("此游戏暂时获取不到封面")
         copy_menu.addAction(copy_cover_action)
-        
+
         # 复制AppID
-        copy_menu.addAction(Action(FluentIcon.CODE, "复制AppID", triggered=self.copy_appid))
-        
+        copy_menu.addAction(Action(FluentIcon.CODE, tr("detail_copy_appid"), triggered=self.copy_appid))
+
         # 复制游戏名称
-        copy_name_action = Action(FluentIcon.TAG, "复制游戏名称", triggered=self.copy_game_name)
+        copy_name_action = Action(FluentIcon.TAG, tr("copy_game_name"), triggered=self.copy_game_name)
         if not self.game_name or self.game_name in ('名称未找到', '获取失败', tr('name_not_found'), tr('fetch_failed'), tr('unknown_game')):
             copy_name_action.setEnabled(False)
-            copy_name_action.setToolTip("此游戏暂时获取不到游戏名")
+            copy_name_action.setToolTip(tr("game_name_unavailable"))
         copy_menu.addAction(copy_name_action)
-        
+
         menu.addMenu(copy_menu)
         menu.addSeparator()
-        
-        menu.addAction(Action(FluentIcon.SHOPPING_CART, "查看商店页面", triggered=lambda: QDesktopServices.openUrl(QUrl(f"https://store.steampowered.com/app/{self.appid}"))))
-        menu.addAction(Action(FluentIcon.LINK, "查看 SteamDB", triggered=lambda: QDesktopServices.openUrl(QUrl(f"https://steamdb.info/app/{self.appid}"))))
+
+        menu.addAction(Action(FluentIcon.SHOPPING_CART, tr("detail_view_store_page"), triggered=lambda: QDesktopServices.openUrl(QUrl(f"https://store.steampowered.com/app/{self.appid}"))))
+        menu.addAction(Action(FluentIcon.LINK, tr("detail_view_steamdb"), triggered=lambda: QDesktopServices.openUrl(QUrl(f"https://steamdb.info/app/{self.appid}"))))
+
+        # SteamTools 游戏显示切换版本选项
+        if self.source_type == "st":
+            menu.addSeparator()
+            menu.addAction(Action(FluentIcon.UPDATE, tr("toggle_version_mode"), triggered=self.on_toggle_clicked))
+
         menu.addSeparator()
         menu.addAction(Action(FluentIcon.DELETE, tr("delete"), triggered=self.on_delete_clicked))
-        menu.exec(self.moreButton.mapToGlobal(self.moreButton.rect().bottomLeft()))
+
+        # 根据是否有pos参数决定菜单显示位置
+        if pos is not None:
+            menu.exec(self.mapToGlobal(pos))
+        else:
+            menu.exec(self.moreButton.mapToGlobal(self.moreButton.rect().bottomLeft()))
+
+    def _show_context_menu(self, pos):
+        """显示右键菜单"""
+        self._show_more_menu(pos)
 
 
 # ===== 联机核心服务 (移植自 Cai-Install-Reborn) =====
@@ -2366,7 +2293,12 @@ class SystemCoreService:
                         continue
                     if self.target_component in files:
                         lower_root = root.lower()
-                        if any(x in lower_root for x in ["crack", "fix", "emu", "goldberg", "smartsteam"]):
+                        skip = False
+                        for x in ["crack", "fix", "emu", "goldberg", "smartsteam"]:
+                            if x in lower_root:
+                                skip = True
+                                break
+                        if skip:
                             continue
                         found = os.path.join(root, self.target_component)
                         if is_valid_dll(found):
@@ -2487,16 +2419,128 @@ class SystemCoreService:
         self.is_active = False
 
 
+class AppIDChangerService:
+    """AppID Changer 联机服务 - 直接修改 steam_appid.txt 文件"""
+
+    def __init__(self, logger_func):
+        self.logger = logger_func
+        self.is_active = False
+        self.app_proc = None
+        self.original_appid = None
+        self.appid_txt_path = None
+        self._monitor_thread = None
+
+    def start_service(self, exe_path: str, app_id: str, on_finish_callback):
+        """启动 AppID Changer 服务"""
+        self.is_active = True
+
+        def _service_thread():
+            try:
+                if not exe_path or not os.path.exists(exe_path):
+                    self.logger("❌ 游戏可执行文件不存在")
+                    on_finish_callback()
+                    return
+
+                work_dir = os.path.dirname(exe_path)
+                self.appid_txt_path = os.path.join(work_dir, "steam_appid.txt")
+
+                # 检查 steam_appid.txt 是否存在
+                if not os.path.exists(self.appid_txt_path):
+                    self.logger(f"❌ {tr('launcher_changer_no_appid_txt')}")
+                    on_finish_callback()
+                    return
+
+                # 读取原始 AppID
+                try:
+                    with open(self.appid_txt_path, "r", encoding="utf-8") as f:
+                        self.original_appid = f.read().strip()
+                    self.logger(f"-> 原始 AppID: {self.original_appid}")
+                except Exception as e:
+                    self.logger(f"❌ {tr('launcher_changer_backup_failed')}: {e}")
+                    on_finish_callback()
+                    return
+
+                # 写入新的 AppID
+                try:
+                    with open(self.appid_txt_path, "w", encoding="utf-8") as f:
+                        f.write(app_id)
+                    self.logger(f"-> 已修改 AppID 为: {app_id}")
+                except Exception as e:
+                    self.logger(f"❌ {tr('launcher_changer_write_failed')}: {e}")
+                    on_finish_callback()
+                    return
+
+                # 启动游戏
+                try:
+                    self.app_proc = subprocess.Popen(
+                        [exe_path],
+                        cwd=work_dir,
+                        shell=True
+                    )
+                    self.logger(f"✅ {tr('launcher_changer_success')} (PID: {self.app_proc.pid})")
+                except Exception as e:
+                    self.logger(f"❌ {tr('launcher_changer_launch_failed')}: {e}")
+                    # 恢复原始 AppID
+                    self._restore_appid()
+                    on_finish_callback()
+                    return
+
+                # 等待游戏关闭
+                self.logger("-> ⏳ 等待游戏关闭...")
+                while self.is_active:
+                    if self.app_proc and self.app_proc.poll() is not None:
+                        self.logger("-> 游戏已关闭")
+                        break
+                    import time
+                    time.sleep(1)
+
+                # 恢复原始 AppID
+                self._restore_appid()
+
+            except Exception as e:
+                self.logger(f"系统错误: {e}")
+            finally:
+                on_finish_callback()
+
+        self._monitor_thread = threading.Thread(target=_service_thread, daemon=True)
+        self._monitor_thread.start()
+
+    def _restore_appid(self):
+        """恢复原始 AppID"""
+        if self.appid_txt_path and self.original_appid is not None:
+            try:
+                with open(self.appid_txt_path, "w", encoding="utf-8") as f:
+                    f.write(self.original_appid)
+                self.logger(f"✅ {tr('launcher_changer_restored')}: {self.original_appid}")
+            except Exception as e:
+                self.logger(f"❌ 恢复原始 AppID 失败: {e}")
+
+    def stop(self):
+        """停止服务"""
+        self.is_active = False
+        if self.app_proc:
+            try:
+                if self.app_proc.poll() is None:
+                    subprocess.call(
+                        ["taskkill", "/F", "/T", "/PID", str(self.app_proc.pid)],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    )
+            except Exception:
+                pass
+            self.app_proc = None
+
+
 class AsyncWorker(QThread):
     """异步工作线程"""
     result_ready = pyqtSignal(object)
     error = pyqtSignal(str)
     
-    def __init__(self, coro):
-        super().__init__()
+    def __init__(self, coro, parent=None):
+        super().__init__(parent)
         self.coro = coro
         self._loop = None
         self._cancelled = False
+        self._finished = False
     
     def cancel(self):
         """请求取消：取消所有 asyncio 任务并关闭事件循环"""
@@ -2538,6 +2582,11 @@ class AsyncWorker(QThread):
                     pass
                 finally:
                     self._loop = None
+            self._finished = True
+    
+    def isFinished(self):
+        """检查线程是否已完成"""
+        return self._finished or super().isFinished()
 
 
 def _replace_worker(old_worker):
@@ -2546,9 +2595,16 @@ def _replace_worker(old_worker):
         try:
             if old_worker.isRunning():
                 old_worker.cancel()
-                old_worker.wait()
-            old_worker.deleteLater()
+                # 等待线程结束，最多等待5秒
+                if not old_worker.wait(5000):
+                    old_worker.terminate()
+                    old_worker.wait(1000)
+            # 确保线程已结束再删除
+            if old_worker.isFinished():
+                old_worker.deleteLater()
         except RuntimeError:
+            pass
+        except Exception:
             pass
 
 class HomePage(ScrollArea):
@@ -2558,6 +2614,9 @@ class HomePage(ScrollArea):
         super().__init__(parent)
         self.setObjectName("homePage")
         self.setWidgetResizable(True)
+        
+        # 共享的网络管理器（所有卡片共用一个）
+        self.network_manager = QNetworkAccessManager(self)
         
         # 主容器
         container = QWidget()
@@ -2657,6 +2716,7 @@ class HomePage(ScrollArea):
         self.game_cards = []
         self.all_games_data = []  # 存储所有游戏数据用于过滤
         self.filtered_games_data = []  # 存储过滤后的游戏数据
+        self._cover_load_timer = None  # 延迟加载定时器
         
         # 加载视图和排序设置（仅同步 combo UI，布局已在上方设置）
         self.load_view_mode_preference()
@@ -2666,8 +2726,37 @@ class HomePage(ScrollArea):
         self.load_games()
     
     def showEvent(self, event):
-        """页面显示时不再重复加载"""
+        """页面显示时触发延迟加载"""
         super().showEvent(event)
+        # 延迟加载可视区域内的封面
+        QTimer.singleShot(100, self._load_visible_covers)
+        
+    def wheelEvent(self, event):
+        """滚动时触发延迟加载"""
+        super().wheelEvent(event)
+        self._schedule_cover_load()
+    
+    def _schedule_cover_load(self):
+        """调度封面延迟加载"""
+        if self._cover_load_timer:
+            self._cover_load_timer.stop()
+        self._cover_load_timer = QTimer.singleShot(200, self._load_visible_covers)
+    
+    def _load_visible_covers(self):
+        """加载可视区域内的封面图片"""
+        if not self.game_cards:
+            return
+        
+        viewport_rect = self.viewport().rect()
+        
+        for card in self.game_cards:
+            # 检查卡片是否在可视区域内（扩大100像素的缓冲区域）
+            card_global_pos = card.mapTo(self.viewport(), QPoint(0, 0))
+            card_rect = QRect(card_global_pos, card.size())
+            
+            # 检查是否有重叠
+            if viewport_rect.intersects(card_rect.adjusted(-100, -100, 100, 100)):
+                card.load_cover(self.network_manager)
     
     def load_games(self):
         """加载游戏列表（两阶段：先快速显示文件列表，再后台加载游戏名称）"""
@@ -2686,6 +2775,25 @@ class HomePage(ScrollArea):
 
     def _load_missing_names(self, files_data):
         """后台加载缺失的游戏名称"""
+        # 过滤掉没有有效appID的游戏，避免无效请求
+        st_games = files_data.get('st', [])
+        gl_games = files_data.get('gl', [])
+        
+        # 检查是否有需要加载名称的游戏（有有效appID且名称为空或未找到）
+        needs_name_load = False
+        for game in st_games + gl_games:
+            appid = game.get('appid', '')
+            game_name = game.get('game_name', '')
+            if appid and appid != 'N/A' and (not game_name or game_name in ('名称未找到', '获取失败', tr('name_not_found'), tr('fetch_failed'))):
+                # 检查是否已在缓存中
+                if not _get_cached_name(appid):
+                    needs_name_load = True
+                    break
+        
+        # 如果没有需要加载名称的游戏，直接返回
+        if not needs_name_load:
+            return
+        
         async def _fetch():
             async with CaiBackend() as backend:
                 await backend.initialize()
@@ -2713,12 +2821,37 @@ class HomePage(ScrollArea):
             if not appid:
                 continue
             
-            # 更新名称
+            # 更新名称并缓存
             if appid in name_map:
                 name = name_map[appid]
+                if name and name not in ('名称未找到', '获取失败', 'Unknown'):
+                    # 保存到缓存
+                    _cache_name(appid, name)
                 if hasattr(card, 'titleLabel'):
                     card.titleLabel.setText(name)
 
+    def __del__(self):
+        """析构函数，确保清理所有worker"""
+        self.cleanup_workers()
+    
+    def cleanup_workers(self):
+        """清理所有worker线程"""
+        for attr in ('worker', '_name_worker', 'delete_worker', 'toggle_worker'):
+            worker = getattr(self, attr, None)
+            if worker:
+                try:
+                    if worker.isRunning():
+                        worker.cancel()
+                        # 等待线程结束，最多等待5秒
+                        if not worker.wait(5000):
+                            worker.terminate()
+                            worker.wait(1000)
+                    # 确保线程已结束再删除
+                    if worker.isFinished():
+                        worker.deleteLater()
+                except Exception:
+                    pass
+                setattr(self, attr, None)
     
     def refresh_games(self):
         """刷新游戏列表"""
@@ -2767,7 +2900,12 @@ class HomePage(ScrollArea):
                 self.all_games_data.append(('gl', game))
             
             # 按 AppID 排序（降序）
-            self.all_games_data.sort(key=lambda x: int(x[1].get('appid', '0')) if x[1].get('appid', '0').isdigit() else 0, reverse=True)
+            def get_appid_sort_key(x):
+                appid = x[1].get('appid', '0')
+                if appid.isdigit():
+                    return int(appid)
+                return 0
+            self.all_games_data.sort(key=get_appid_sort_key, reverse=True)
             
             # 显示所有游戏
             self.display_games(self.all_games_data)
@@ -2777,6 +2915,19 @@ class HomePage(ScrollArea):
                 
         except Exception as e:
             self.stats_label.setText(f"{tr('data_process_failed')}: {str(e)}")
+    
+    def _load_cover_from_cache(self, card):
+        """从缓存加载封面图片（同步加载，无网络请求）"""
+        appid = getattr(card, 'appid', None)
+        if not appid:
+            return
+        
+        # 先检查内存缓存，再检查磁盘缓存
+        cached_data = _get_cached_cover(appid)
+        if cached_data:
+            pixmap = QPixmap()
+            if pixmap.loadFromData(cached_data):
+                card.set_cover_pixmap(pixmap)
     
     def display_games(self, games_data):
         """显示游戏列表"""
@@ -2795,15 +2946,22 @@ class HomePage(ScrollArea):
             game_name = game.get('game_name', '')
             mode = game.get('mode', 'auto')  # 获取版本模式信息
             
-            # 如果游戏名称为空或显示为"名称未找到"，显示更友好的提示
+            # 如果游戏名称为空或显示为"名称未找到"，尝试从缓存获取
             if not game_name or game_name in ('名称未找到', '获取失败', tr('name_not_found'), tr('fetch_failed')):
-                game_name = f"AppID {appid}"
+                cached_name = _get_cached_name(appid)
+                if cached_name:
+                    game_name = cached_name
+                else:
+                    game_name = f"AppID {appid}"
             
             # 根据视图模式创建不同类型的卡片
             if self.current_view_mode == "grid":
                 card = GameCardGrid(appid, game_name, source_type, self, mode)
             else:
                 card = GameCard(appid, game_name, source_type, self, mode)
+            
+            # 立即从缓存加载封面（如果有缓存）
+            self._load_cover_from_cache(card)
             
             self.card_layout.addWidget(card)
             self.game_cards.append(card)
@@ -2824,13 +2982,22 @@ class HomePage(ScrollArea):
     def sort_games(self, games_data):
         """根据排序选项对游戏进行排序"""
         sort_mode = self.sort_combo.currentText()
-        
+
+        def get_name_key(x):
+            return x[1].get('game_name', f"AppID {x[1].get('appid', '0')}")
+
+        def get_appid_key(x):
+            appid = x[1].get('appid', '0')
+            if appid.isdigit():
+                return int(appid)
+            return 0
+
         if sort_mode == tr("sort_az"):
-            return sorted(games_data, key=lambda x: x[1].get('game_name', f"AppID {x[1].get('appid', '0')}"))
+            return sorted(games_data, key=get_name_key)
         elif sort_mode == tr("sort_za"):
-            return sorted(games_data, key=lambda x: x[1].get('game_name', f"AppID {x[1].get('appid', '0')}"), reverse=True)
+            return sorted(games_data, key=get_name_key, reverse=True)
         else:  # 默认 - 按AppID降序
-            return sorted(games_data, key=lambda x: int(x[1].get('appid', '0')) if x[1].get('appid', '0').isdigit() else 0, reverse=True)
+            return sorted(games_data, key=get_appid_key, reverse=True)
     
     def on_view_mode_changed(self):
         """视图模式改变"""
@@ -2912,52 +3079,77 @@ class HomePage(ScrollArea):
         """清除搜索"""
         self.display_games(self.all_games_data)
     
-    def delete_game(self, appid, source_type):
-        """删除游戏"""
-        # 显示确认对话框
+    def delete_game_with_confirm(self, appid, source_type, game_name=None):
+        """在主窗口显示确认删除对话框并执行删除
+        
+        Args:
+            appid: 游戏AppID
+            source_type: 来源类型 ('st' 或 'gl')
+            game_name: 游戏名称，用于显示在确认对话框中
+        """
+        display_name = game_name if game_name else f"AppID {appid}"
+        
+        # 在主窗口显示确认对话框
         dialog = MessageBox(
             tr("confirm_delete"),
-            tr("delete_message", appid),
+            tr("delete_message", display_name),
             self
         )
         
         if dialog.exec():
-            # 用户确认删除
-            async def _delete():
-                async with CaiBackend() as backend:
-                    await backend.initialize()
-                    
-                    # 构造删除项
-                    items = [{
-                        'appid': appid,
-                        'filename': f'{appid}.lua' if source_type == 'st' else f'{appid}.txt'
-                    }]
-                    
-                    result = backend.delete_managed_files(source_type, items)
-                    return result
-            
-            _replace_worker(getattr(self, 'delete_worker', None))
-            self.delete_worker = AsyncWorker(_delete())
-            self.delete_worker.result_ready.connect(lambda result: self.on_delete_complete(result, appid))
-            self.delete_worker.error.connect(self.on_delete_error)
-            self.delete_worker.finished.connect(self.delete_worker.deleteLater)
-            self.delete_worker.start()
-            
-            InfoBar.info(
-                title=tr("deleting"),
-                content=f"{tr('deleting')} AppID {appid}...",
-                parent=self.window(),
-                position=InfoBarPosition.TOP
-            )
+            # 用户确认删除，调用删除方法
+            self.delete_game(appid, source_type, None)
+    
+    def delete_game(self, appid, source_type, parent_widget=None):
+        """删除游戏
+        
+        Args:
+            appid: 游戏AppID
+            source_type: 来源类型 ('st' 或 'gl')
+            parent_widget: 可选的父窗口，用于显示提示。如果为None则使用self
+        """
+        # 确定父窗口
+        info_parent = parent_widget if parent_widget else self
+        
+        # 直接执行删除（确认对话框已在 delete_game_with_confirm 中处理）
+        async def _delete():
+            async with CaiBackend() as backend:
+                await backend.initialize()
+                
+                # 构造删除项
+                items = [{
+                    'appid': appid,
+                    'filename': f'{appid}.lua' if source_type == 'st' else f'{appid}.txt'
+                }]
+                
+                result = backend.delete_managed_files(source_type, items)
+                return result
+        
+        _replace_worker(getattr(self, 'delete_worker', None))
+        self.delete_worker = AsyncWorker(_delete())
+        # 传递parent_widget给完成回调
+        self.delete_worker.result_ready.connect(lambda result: self.on_delete_complete(result, appid, parent_widget))
+        self.delete_worker.error.connect(lambda error: self.on_delete_error(error, parent_widget))
+        self.delete_worker.finished.connect(self.delete_worker.deleteLater)
+        self.delete_worker.start()
+        
+        InfoBar.info(
+            title=tr("deleting"),
+            content=f"{tr('deleting')} AppID {appid}...",
+            parent=info_parent.window() if info_parent else self.window(),
+            position=InfoBarPosition.TOP
+        )
     
     @pyqtSlot(object)
-    def on_delete_complete(self, result, appid):
+    def on_delete_complete(self, result, appid, parent_widget=None):
         """删除完成"""
+        info_parent = parent_widget if parent_widget else self
+        
         if result.get('success'):
             InfoBar.success(
                 title=tr("delete_success"),
                 content=f"AppID {appid} {tr('delete_success')}",
-                parent=self,
+                parent=info_parent,
                 position=InfoBarPosition.TOP
             )
             # 重新加载游戏列表
@@ -2967,22 +3159,31 @@ class HomePage(ScrollArea):
             InfoBar.error(
                 title=tr("delete_failed"),
                 content=result.get('message', tr('unknown_error')),
-                parent=self,
+                parent=info_parent,
                 position=InfoBarPosition.TOP
             )
     
     @pyqtSlot(str)
-    def on_delete_error(self, error):
+    def on_delete_error(self, error, parent_widget=None):
         """删除失败"""
+        info_parent = parent_widget if parent_widget else self
         InfoBar.error(
             title=tr("delete_failed"),
             content=error,
-            parent=self,
+            parent=info_parent,
             position=InfoBarPosition.TOP
         )
 
-    def toggle_st_version(self, filename, appid):
-        """切换ST文件版本模式（自动更新/固定版本）"""
+    def toggle_st_version(self, filename, appid, parent_widget=None):
+        """切换ST文件版本模式（自动更新/固定版本）
+        
+        Args:
+            filename: ST文件名
+            appid: 游戏AppID
+            parent_widget: 可选的父窗口，用于显示提示。如果为None则使用self
+        """
+        info_parent = parent_widget if parent_widget else self
+        
         async def _toggle():
             async with CaiBackend() as backend:
                 await backend.initialize()
@@ -2991,169 +3192,54 @@ class HomePage(ScrollArea):
         
         _replace_worker(getattr(self, 'toggle_worker', None))
         self.toggle_worker = AsyncWorker(_toggle())
-        self.toggle_worker.result_ready.connect(lambda result: self.on_toggle_st_version_complete(result, appid))
-        self.toggle_worker.error.connect(self.on_toggle_st_version_error)
+        self.toggle_worker.result_ready.connect(lambda result: self.on_toggle_st_version_complete(result, appid, parent_widget))
+        self.toggle_worker.error.connect(lambda error: self.on_toggle_st_version_error(error, parent_widget))
         self.toggle_worker.finished.connect(self.toggle_worker.deleteLater)
         self.toggle_worker.start()
         
         InfoBar.info(
             title="版本切换",
             content=f"正在切换 AppID {appid} 的版本模式...",
-            parent=self,
+            parent=info_parent,
             position=InfoBarPosition.TOP
         )
     
     @pyqtSlot(object)
-    def on_toggle_st_version_complete(self, result, appid):
+    @pyqtSlot(object)
+    def on_toggle_st_version_complete(self, result, appid, parent_widget=None):
         """ST文件版本切换完成"""
+        info_parent = parent_widget if parent_widget else self
+
         if result.get('success'):
             InfoBar.success(
                 title="切换成功",
                 content=result.get('message', '版本模式已切换'),
-                parent=self,
-                position=InfoBarPosition.TOP
+                parent=info_parent,
+                position=InfoBarPosition.TOP,
+                duration=4000
             )
-            # 更新对应卡片的版本模式标签
             for card in self.game_cards:
                 if hasattr(card, 'appid') and card.appid == appid and hasattr(card, 'source_type') and card.source_type == 'st':
-                    # 从消息中判断新的模式
                     message = result.get('message', '')
                     is_fixed = '固定版本' in message
                     card.update_mode_label(is_fixed)
                     break
-            
-            # 如果切换到了固定版本，检查是否需要补全清单文件
-            message = result.get('message', '')
-            if '固定版本' in message:
-                # 延迟一点执行，让切换完成的提示先显示
-                QTimer.singleShot(500, lambda: self._check_and_complete_manifest_after_toggle(appid))
         else:
             InfoBar.error(
                 title="切换失败",
                 content=result.get('message', '未知错误'),
-                parent=self,
+                parent=info_parent,
                 position=InfoBarPosition.TOP
             )
-    
-    def _check_and_complete_manifest_after_toggle(self, appid):
-        """切换固定版本后，检查并补全清单文件"""
-        # 读取配置，判断修复模式
-        config_path = APP_ROOT / 'config' / 'config.json'
-        manifest_mode = "ask"  # 默认询问
-        try:
-            if config_path.exists():
-                import json
-                with open(config_path, 'r', encoding='utf-8') as f:
-                    config = json.load(f)
-                manifest_mode = config.get("ST_Fixed_Manifest_Mode", "ask")
-        except Exception:
-            pass
-        
-        # 如果设置为从不修复，直接返回
-        if manifest_mode == "never":
-            return
-        
-        # 如果设置为询问，显示确认对话框
-        if manifest_mode == "ask":
-            dialog = MessageBox(
-                "修复Manifest",
-                f"AppID {appid} 切换到固定版本后可能需要修复manifest文件。\n\n是否现在修复？",
-                self
-            )
-            if not dialog.exec():
-                return  # 用户取消
-        
-        # 执行修复（始终模式或询问模式且用户确认）
-        async def _check_and_complete():
-            async with CaiBackend() as backend:
-                await backend.initialize()
-                
-                # 检查本地是否已有 manifest 文件
-                search_paths = [
-                    backend.steam_path / 'config' / 'depotcache',
-                    backend.steam_path / 'depotcache'
-                ]
-                
-                # 获取该 AppID 的所有 depot IDs
-                depots_info = await backend.get_depots_safe(str(appid))
-                if not depots_info:
-                    backend.log.info(f"[切换固定版本] 无法获取 AppID {appid} 的 depot 信息，跳过补全")
-                    return None
-                
-                depot_ids = [str(d[0]) for d in depots_info if d[0]]
-                
-                # 检查是否已存在 manifest 文件
-                existing_count = 0
-                for depot_id in depot_ids:
-                    for search_dir in search_paths:
-                        if not search_dir.exists():
-                            continue
-                        candidates = list(search_dir.glob(f"{depot_id}_*.manifest"))
-                        if candidates:
-                            existing_count += 1
-                            break
-                
-                # 如果已存在部分 manifest，认为不需要补全
-                if existing_count >= len(depot_ids):
-                    backend.log.info(f"[切换固定版本] AppID {appid} 已有全部 manifest 文件，无需补全")
-                    return None
-                
-                # 需要补全清单文件
-                backend.log.info(f"[切换固定版本] AppID {appid} 缺少 manifest 文件 ({existing_count}/{len(depot_ids)})，开始补全...")
-                
-                # 调用补全清单文件
-                post_result = await backend.complete_manifest_files(str(appid))
-                return post_result
-        
-        def on_complete_result(result):
-            if result is None:
-                return  # 不需要补全或获取失败
-            
-            if result.get('success'):
-                downloaded = result.get('downloaded', 0)
-                total = result.get('total', 0)
-                InfoBar.success(
-                    title="补全完成",
-                    content=f"AppID {appid} 补全完成：{downloaded}/{total}",
-                    parent=self,
-                    position=InfoBarPosition.TOP,
-                    duration=3000
-                )
-            else:
-                msg = result.get('message', '补全失败')
-                InfoBar.warning(
-                    title="补全清单",
-                    content=f"AppID {appid} {msg}",
-                    parent=self,
-                    position=InfoBarPosition.TOP,
-                    duration=4000
-                )
-        
-        def on_complete_error(error):
-            InfoBar.error(
-                title="补全失败",
-                content=f"AppID {appid} 补全清单时出错: {error}",
-                parent=self,
-                position=InfoBarPosition.TOP,
-                duration=4000
-            )
-        
-        # 启动补全任务
-        _replace_worker(getattr(self, '_manifest_complete_worker', None))
-        worker = AsyncWorker(_check_and_complete())
-        self._manifest_complete_worker = worker
-        worker.result_ready.connect(on_complete_result)
-        worker.error.connect(on_complete_error)
-        worker.finished.connect(worker.deleteLater)
-        worker.start()
-    
+
     @pyqtSlot(str)
-    def on_toggle_st_version_error(self, error):
+    def on_toggle_st_version_error(self, error, parent_widget=None):
         """ST文件版本切换失败"""
+        info_parent = parent_widget if parent_widget else self
         InfoBar.error(
             title="切换失败",
             content=error,
-            parent=self,
+            parent=info_parent,
             position=InfoBarPosition.TOP
         )
 
@@ -3200,33 +3286,6 @@ class HomePage(ScrollArea):
             self.view_mode_combo.currentIndexChanged.connect(self.on_view_mode_changed)
         except Exception as e:
             print(f"加载视图模式偏好失败: {e}")
-        """保存排序模式设置"""
-        try:
-            config_path = APP_ROOT / 'config' / 'config.json'
-            import json
-            
-            # 读取现有配置
-            if config_path.exists():
-                with open(config_path, 'r', encoding='utf-8') as f:
-                    config = json.load(f)
-            else:
-                from backend.cai_backend import DEFAULT_CONFIG
-                config = DEFAULT_CONFIG.copy()
-            
-            # 保存排序模式
-            sort_mode_text = self.sort_combo.currentText()
-            if sort_mode_text == tr("sort_az"):
-                config["home_sort_mode"] = "az"
-            elif sort_mode_text == tr("sort_za"):
-                config["home_sort_mode"] = "za"
-            else:
-                config["home_sort_mode"] = "default"
-            
-            # 保存配置
-            with open(config_path, 'w', encoding='utf-8') as f:
-                json.dump(config, f, indent=2, ensure_ascii=False)
-        except Exception as e:
-            print(f"保存排序模式失败: {e}")
     
     def load_sort_mode_preference(self):
         """加载排序模式设置"""
@@ -3295,16 +3354,28 @@ class HomePage(ScrollArea):
 
 class SearchResultCard(CardWidget):
     """搜索结果卡片组件"""
-    
+
     def __init__(self, appid, game_name, parent=None):
         super().__init__(parent)
         self.appid = appid
         self.game_name = game_name
+
+        # 设置透明边框
+        self.setStyleSheet("""
+            SearchResultCard {
+                border: none;
+                background: transparent;
+            }
+        """)
         
+        # 设置右键菜单
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._show_context_menu)
+
         # 网络管理器
         self.network_manager = QNetworkAccessManager(self)
         self.network_manager.finished.connect(self.on_cover_loaded)
-        
+
         # 创建布局
         self.hBoxLayout = QHBoxLayout(self)
         self.vBoxLayout = QVBoxLayout()
@@ -3317,6 +3388,9 @@ class SearchResultCard(CardWidget):
         self.coverLabel.setStyleSheet("border-radius: 4px; background: #1a1a1a;")
         # 监听主题变化
         self.theme_changed()
+        # 设置封面可点击，点击打开游戏详情
+        self.coverLabel.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.coverLabel.mousePressEvent = lambda e: self.show_game_detail()
         
         # 游戏标题
         self.titleLabel = BodyLabel(game_name, self)
@@ -3338,8 +3412,8 @@ class SearchResultCard(CardWidget):
         self.moreButton.setFixedSize(32, 32)
         self.moreButton.setToolTip("更多")
         self.moreButton.installEventFilter(ToolTipFilter(self.moreButton, showDelay=150, position=ToolTipPosition.TOP))
-        self.moreButton.clicked.connect(self._show_more_menu)
-        
+        self.moreButton.clicked.connect(lambda: self._show_more_menu())
+
         # 设置布局
         self.setFixedHeight(80)
         self.hBoxLayout.setContentsMargins(15, 12, 15, 12)
@@ -3433,51 +3507,85 @@ class SearchResultCard(CardWidget):
             duration=2000
         )
 
-    def _show_more_menu(self):
+    def show_game_detail(self):
+        """显示游戏详情对话框"""
+        dialog = GameDetailDialog(self.appid, self.game_name, self.window())
+        dialog.exec()
+
+    def _show_more_menu(self, pos=None):
         menu = RoundMenu(parent=self)
-        
+
+        # 查看详情
+        menu.addAction(Action(FluentIcon.INFO, tr("detail_view_detail"), triggered=self.show_game_detail))
+        menu.addSeparator()
+
+        # 入库选项
+        menu.addAction(Action(FluentIcon.CLOUD_DOWNLOAD, tr("detail_add_to_library"), triggered=self.on_select_clicked))
+        menu.addSeparator()
+
         # 复制菜单（二级菜单）
         copy_menu = RoundMenu(parent=self)
-        copy_menu.setTitle("复制")
+        copy_menu.setTitle(tr("copy"))
         copy_menu.setIcon(FluentIcon.COPY)
-        
+
         # 复制封面
-        copy_cover_action = Action(FluentIcon.PHOTO, "复制封面", triggered=self.copy_cover)
+        copy_cover_action = Action(FluentIcon.PHOTO, tr("copy_cover"), triggered=self.copy_cover)
         if not self.coverLabel.pixmap():
             copy_cover_action.setEnabled(False)
-            copy_cover_action.setToolTip("此游戏暂时获取不到封面")
+            copy_cover_action.setToolTip(tr("cover_unavailable"))
         copy_menu.addAction(copy_cover_action)
-        
+
         # 复制AppID
-        copy_menu.addAction(Action(FluentIcon.CODE, "复制AppID", triggered=self.copy_appid))
-        
+        copy_menu.addAction(Action(FluentIcon.CODE, tr("detail_copy_appid"), triggered=self.copy_appid))
+
         # 复制游戏名称
-        copy_name_action = Action(FluentIcon.TAG, "复制游戏名称", triggered=self.copy_game_name)
+        copy_name_action = Action(FluentIcon.TAG, tr("copy_game_name"), triggered=self.copy_game_name)
         if not self.game_name or self.game_name in ('名称未找到', '获取失败', tr('name_not_found'), tr('fetch_failed'), tr('unknown_game')):
             copy_name_action.setEnabled(False)
-            copy_name_action.setToolTip("此游戏暂时获取不到游戏名")
+            copy_name_action.setToolTip(tr("game_name_unavailable"))
         copy_menu.addAction(copy_name_action)
-        
+
         menu.addMenu(copy_menu)
         menu.addSeparator()
-        
-        menu.addAction(Action(FluentIcon.SHOPPING_CART, "查看商店页面", triggered=lambda: QDesktopServices.openUrl(QUrl(f"https://store.steampowered.com/app/{self.appid}"))))
-        menu.addAction(Action(FluentIcon.LINK, "查看 SteamDB", triggered=lambda: QDesktopServices.openUrl(QUrl(f"https://steamdb.info/app/{self.appid}"))))
-        menu.exec(self.moreButton.mapToGlobal(self.moreButton.rect().bottomLeft()))
+
+        menu.addAction(Action(FluentIcon.SHOPPING_CART, tr("detail_view_store_page"), triggered=lambda: QDesktopServices.openUrl(QUrl(f"https://store.steampowered.com/app/{self.appid}"))))
+        menu.addAction(Action(FluentIcon.LINK, tr("detail_view_steamdb"), triggered=lambda: QDesktopServices.openUrl(QUrl(f"https://steamdb.info/app/{self.appid}"))))
+
+        # 根据是否有pos参数决定菜单显示位置
+        if pos is not None:
+            menu.exec(self.mapToGlobal(pos))
+        else:
+            menu.exec(self.moreButton.mapToGlobal(self.moreButton.rect().bottomLeft()))
+
+    def _show_context_menu(self, pos):
+        """显示右键菜单"""
+        self._show_more_menu(pos)
 
 
 class SearchResultCardGrid(CardWidget):
     """搜索结果卡片组件 - 网格视图模式"""
-    
+
     def __init__(self, appid, game_name, parent=None):
         super().__init__(parent)
         self.appid = appid
         self.game_name = game_name
+
+        # 设置透明边框
+        self.setStyleSheet("""
+            SearchResultCardGrid {
+                border: none;
+                background: transparent;
+            }
+        """)
         
+        # 设置右键菜单
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._show_context_menu)
+
         # 网络管理器
         self.network_manager = QNetworkAccessManager(self)
         self.network_manager.finished.connect(self.on_cover_loaded)
-        
+
         # 创建垂直布局
         self.vBoxLayout = QVBoxLayout(self)
         self.vBoxLayout.setContentsMargins(10, 10, 10, 10)
@@ -3491,6 +3599,9 @@ class SearchResultCardGrid(CardWidget):
         self.coverLabel.setStyleSheet("border-radius: 4px; background: #1a1a1a;")
         # 监听主题变化
         self.theme_changed()
+        # 设置封面可点击，点击打开游戏详情
+        self.coverLabel.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.coverLabel.mousePressEvent = lambda e: self.show_game_detail()
         
         # 游戏标题
         self.titleLabel = BodyLabel(game_name, self)
@@ -3516,8 +3627,8 @@ class SearchResultCardGrid(CardWidget):
         self.moreButton.setFixedSize(32, 32)
         self.moreButton.setToolTip("更多")
         self.moreButton.installEventFilter(ToolTipFilter(self.moreButton, showDelay=150, position=ToolTipPosition.TOP))
-        self.moreButton.clicked.connect(self._show_more_menu)
-        
+        self.moreButton.clicked.connect(lambda: self._show_more_menu())
+
         # 设置布局
         self.setFixedSize(200, 250)
         
@@ -3613,37 +3724,59 @@ class SearchResultCardGrid(CardWidget):
             duration=2000
         )
 
-    def _show_more_menu(self):
+    def show_game_detail(self):
+        """显示游戏详情对话框"""
+        dialog = GameDetailDialog(self.appid, self.game_name, self.window())
+        dialog.exec()
+
+    def _show_more_menu(self, pos=None):
         menu = RoundMenu(parent=self)
-        
+
+        # 查看详情
+        menu.addAction(Action(FluentIcon.INFO, "查看详情", triggered=self.show_game_detail))
+        menu.addSeparator()
+
+        # 入库选项
+        menu.addAction(Action(FluentIcon.CLOUD_DOWNLOAD, "入库", triggered=self.on_select_clicked))
+        menu.addSeparator()
+
         # 复制菜单（二级菜单）
         copy_menu = RoundMenu(parent=self)
         copy_menu.setTitle("复制")
         copy_menu.setIcon(FluentIcon.COPY)
-        
+
         # 复制封面
         copy_cover_action = Action(FluentIcon.PHOTO, "复制封面", triggered=self.copy_cover)
         if not self.coverLabel.pixmap():
             copy_cover_action.setEnabled(False)
             copy_cover_action.setToolTip("此游戏暂时获取不到封面")
         copy_menu.addAction(copy_cover_action)
-        
+
         # 复制AppID
         copy_menu.addAction(Action(FluentIcon.CODE, "复制AppID", triggered=self.copy_appid))
-        
+
         # 复制游戏名称
         copy_name_action = Action(FluentIcon.TAG, "复制游戏名称", triggered=self.copy_game_name)
         if not self.game_name or self.game_name in ('名称未找到', '获取失败', tr('name_not_found'), tr('fetch_failed'), tr('unknown_game')):
             copy_name_action.setEnabled(False)
             copy_name_action.setToolTip("此游戏暂时获取不到游戏名")
         copy_menu.addAction(copy_name_action)
-        
+
         menu.addMenu(copy_menu)
         menu.addSeparator()
-        
+
         menu.addAction(Action(FluentIcon.SHOPPING_CART, "查看商店页面", triggered=lambda: QDesktopServices.openUrl(QUrl(f"https://store.steampowered.com/app/{self.appid}"))))
         menu.addAction(Action(FluentIcon.LINK, "查看 SteamDB", triggered=lambda: QDesktopServices.openUrl(QUrl(f"https://steamdb.info/app/{self.appid}"))))
-        menu.exec(self.moreButton.mapToGlobal(self.moreButton.rect().bottomLeft()))
+
+        # 根据是否有pos参数决定菜单显示位置
+        if pos is not None:
+            menu.exec(self.mapToGlobal(pos))
+        else:
+            menu.exec(self.moreButton.mapToGlobal(self.moreButton.rect().bottomLeft()))
+
+    def _show_context_menu(self, pos):
+        """显示右键菜单"""
+        self._show_more_menu(pos)
 
 
 class SearchPage(ScrollArea):
@@ -3714,14 +3847,15 @@ class SearchPage(ScrollArea):
         self.manifest_source_combo.addItems([
             tr("auto_select"),
             "Cysaw",
-            "GMRC",
+            tr("gmrc"),
             "Walftech",
-            "Sudama",
-            "清单不求人",
+            tr("sudama"),
+            tr("buqiuren"),
             tr("MHub"),
             tr("github_auiowu"),
-            "SteamAutoCracks V2",
-            "SteamAutoCracks V1",
+            tr("github_mau"),
+            "SteamAutoCracks V2 [废弃]",
+            "SteamAutoCracks V1 [废弃]",
             tr("sac-other"),
         ])
         self.manifest_source_combo.setCurrentIndex(0)  # 默认自动选择
@@ -3741,13 +3875,7 @@ class SearchPage(ScrollArea):
         self.patch_key_check.setChecked(True)  # 默认勾选修补 Depot Key
         self.patch_key_check.stateChanged.connect(self.on_patch_key_changed)
         options_layout.addWidget(self.patch_key_check)
-        
-        # 修补Manifest选项
-        self.patch_manifest_check = CheckBox(tr("patch_manifest"), self)
-        self.patch_manifest_check.setChecked(False)
-        self.patch_manifest_check.stateChanged.connect(self.on_patch_manifest_changed)
-        options_layout.addWidget(self.patch_manifest_check)
-        
+
         options_layout.addStretch(1)
         layout.addLayout(options_layout)
         
@@ -3836,22 +3964,21 @@ class SearchPage(ScrollArea):
         self._progress_timer.setInterval(120)
         self._progress_timer.timeout.connect(self._flush_download_progress)
         
-        # 加载保存的清单源选择
-        self.load_manifest_source_preference()
-        
+        # 加载保存的清单源选择（包括自定义仓库）
+        self.refresh_manifest_source_combo()
+
         # 加载视图和排序设置
         self.load_view_mode_preference()
         self.load_sort_mode_preference()
-        
+
         # 加载DLC和修补选项状态
         self.load_add_dlc_preference()
         self.load_patch_key_preference()
-        self.load_patch_manifest_preference()
-    
+
     def on_add_dlc_changed(self):
         """DLC选项改变时保存状态"""
         self.save_add_dlc_preference()
-    
+
     def on_patch_key_changed(self):
         """修补Key选项改变时保存状态"""
         self.save_patch_key_preference()
@@ -4031,7 +4158,7 @@ class SearchPage(ScrollArea):
         # 检查是否启用了进度条显示
         if not self._should_show_progress():
             return
-            
+
         if self._progress_timer.isActive():
             self._progress_timer.stop()
         self.download_progress.setValue(100 if success else min(95, max(0, self.download_progress.value())))
@@ -4042,65 +4169,28 @@ class SearchPage(ScrollArea):
             self.download_progress_label.hide(),
             self.cancel_download_btn.hide()
         ))
-    
-    def on_patch_manifest_changed(self):
-        """修补Manifest选项改变时保存状态"""
-        self.save_patch_manifest_preference()
-    
-    def save_patch_manifest_preference(self):
-        """保存修补Manifest选项状态"""
-        try:
-            config_path = APP_ROOT / 'config' / 'config.json'
-            import json
-            
-            # 读取现有配置
-            if config_path.exists():
-                with open(config_path, 'r', encoding='utf-8') as f:
-                    config = json.load(f)
-            else:
-                from backend.cai_backend import DEFAULT_CONFIG
-                config = DEFAULT_CONFIG.copy()
-            
-            # 保存修补Manifest选项状态
-            config["patch_manifest_default"] = self.patch_manifest_check.isChecked()
-            
-            # 保存配置
-            with open(config_path, 'w', encoding='utf-8') as f:
-                json.dump(config, f, indent=2, ensure_ascii=False)
-        except Exception as e:
-            print(f"保存修补Manifest选项失败: {e}")
-    
-    def load_patch_manifest_preference(self):
-        """加载修补Manifest选项状态"""
-        try:
-            config_path = APP_ROOT / 'config' / 'config.json'
-            import json
-            
-            # 读取配置
-            if config_path.exists():
-                with open(config_path, 'r', encoding='utf-8') as f:
-                    config = json.load(f)
-                
-                # 获取保存的修补Manifest选项状态
-                patch_manifest_default = config.get("patch_manifest_default", False)
-                self.patch_manifest_check.setChecked(patch_manifest_default)
-                
-        except Exception as e:
-            print(f"加载修补Manifest选项失败: {e}")
-    
+
     def __del__(self):
         """析构函数，确保清理所有worker"""
         self.cleanup_workers()
     
     def cleanup_workers(self):
         """清理所有worker线程"""
-        for attr in ('search_worker', 'unlock_worker', '_manifest_worker'):
+        for attr in ('search_worker', 'unlock_worker', '_manifest_worker', '_rec_worker'):
             worker = getattr(self, attr, None)
             if worker:
-                if worker.isRunning():
-                    worker.cancel()
-                    worker.wait(3000)
-                worker.deleteLater()
+                try:
+                    if worker.isRunning():
+                        worker.cancel()
+                        # 等待线程结束，最多等待5秒
+                        if not worker.wait(5000):
+                            worker.terminate()
+                            worker.wait(1000)
+                    # 确保线程已结束再删除
+                    if worker.isFinished():
+                        worker.deleteLater()
+                except Exception:
+                    pass
                 setattr(self, attr, None)
     
     def on_manifest_source_changed(self):
@@ -4112,7 +4202,7 @@ class SearchPage(ScrollArea):
         async def _save():
             config_path = APP_ROOT / 'config' / 'config.json'
             import json
-            
+
             # 读取现有配置
             if config_path.exists():
                 with open(config_path, 'r', encoding='utf-8') as f:
@@ -4120,8 +4210,8 @@ class SearchPage(ScrollArea):
             else:
                 from backend.cai_backend import DEFAULT_CONFIG
                 config = DEFAULT_CONFIG.copy()
-            
-            # 保存清单源选择
+
+            # 基础源映射
             source_mapping = {
                 0: "auto",
                 1: "cysaw",
@@ -4131,22 +4221,32 @@ class SearchPage(ScrollArea):
                 5: "buqiuren",
                 6: "MHub",
                 7: "github_auiowu",
-                8: "steamautocracks_v2",
-                9: "steamautocracks_v1",
-                10: "sac-other",
+                8: "github_mau",
+                9: "steamautocracks_v2",
+                10: "steamautocracks_v1",
+                11: "sac-other",
             }
-            config["default_manifest_source"] = source_mapping.get(self.manifest_source_combo.currentIndex(), "auto")
-            
+
+            current_index = self.manifest_source_combo.currentIndex()
+            current_text = self.manifest_source_combo.currentText()
+
+            if current_index <= 11:
+                # 基础源
+                config["default_manifest_source"] = source_mapping.get(current_index, "auto")
+            else:
+                # 自定义仓库，保存名称
+                config["default_manifest_source"] = current_text
+
             # 保存配置
             with open(config_path, 'w', encoding='utf-8') as f:
                 json.dump(config, f, indent=2, ensure_ascii=False)
-        
+
         # 使用异步worker保存，并确保正确清理
         if hasattr(self, '_manifest_worker') and self._manifest_worker and self._manifest_worker.isRunning():
             self._manifest_worker.cancel()
             self._manifest_worker.wait()
             self._manifest_worker = None
-        
+
         self._manifest_worker = AsyncWorker(_save())
         self._manifest_worker.result_ready.connect(self._on_manifest_save_complete)
         self._manifest_worker.error.connect(self._on_manifest_save_error)
@@ -4161,45 +4261,116 @@ class SearchPage(ScrollArea):
         """保存清单源偏好失败"""
         print(f"保存清单源偏好失败: {error}")
         self._manifest_worker = None
-    
-    def load_manifest_source_preference(self):
-        """加载清单源选择偏好"""
+
+    def refresh_manifest_source_combo(self):
+        """刷新清单源下拉框，包括自定义仓库"""
         try:
+            # 保存当前选中的索引（如果有）
+            current_index = -1
+            current_text = ""
+            try:
+                current_index = self.manifest_source_combo.currentIndex()
+                current_text = self.manifest_source_combo.currentText()
+            except:
+                pass
+
+            # 断开信号，避免触发保存
+            try:
+                self.manifest_source_combo.currentIndexChanged.disconnect(self.on_manifest_source_changed)
+            except:
+                pass
+
+            # 清空下拉框
+            self.manifest_source_combo.clear()
+
+            # 添加基础选项
+            base_items = [
+                tr("auto_select"),
+                "Cysaw",
+                tr("gmrc"),
+                "Walftech",
+                tr("sudama"),
+                tr("buqiuren"),
+                tr("MHub"),
+                tr("github_auiowu"),
+                tr("github_mau"),
+                "SteamAutoCracks V2 [废弃]",
+                "SteamAutoCracks V1 [废弃]",
+                tr("sac-other"),
+            ]
+            self.manifest_source_combo.addItems(base_items)
+
+            # 从配置中加载自定义仓库和保存的清单源偏好
             config_path = APP_ROOT / 'config' / 'config.json'
-            import json
-            
-            # 读取配置
+            saved_source = "auto"  # 默认自动选择
             if config_path.exists():
+                import json
                 with open(config_path, 'r', encoding='utf-8') as f:
                     config = json.load(f)
-                
-                # 获取保存的清单源
+
+                # 获取保存的清单源偏好
                 saved_source = config.get("default_manifest_source", "auto")
-                
-                # 映射到combo索引
-                source_mapping = {
-                    "auto": 0,
-                    "cysaw": 1,
-                    "gmrc": 2,
-                    "walftech": 3,
-                    "sudama": 4,
-                    "buqiuren": 5,
-                    "MHub": 6,
-                    "github_auiowu": 7,
-                    "steamautocracks_v2": 8,
-                    "steamautocracks_v1": 9,
-                    "sac-other": 10,
-                }
-                
-                index = source_mapping.get(saved_source, 0)
-                # 断开信号，避免触发保存
-                self.manifest_source_combo.currentIndexChanged.disconnect(self.on_manifest_source_changed)
-                self.manifest_source_combo.setCurrentIndex(index)
-                self.manifest_source_combo.currentIndexChanged.connect(self.on_manifest_source_changed)
-                
+
+                custom_repos = config.get("Custom_Repos", {"github": [], "zip": []})
+
+                # 添加自定义GitHub仓库
+                for repo in custom_repos.get("github", []):
+                    name = repo.get("name", "")
+                    if name:
+                        self.manifest_source_combo.addItem(name)
+
+                # 添加自定义ZIP仓库
+                for repo in custom_repos.get("zip", []):
+                    name = repo.get("name", "")
+                    if name:
+                        self.manifest_source_combo.addItem(name)
+
+            # 映射到combo索引
+            source_mapping = {
+                "auto": 0,
+                "cysaw": 1,
+                "gmrc": 2,
+                "walftech": 3,
+                "sudama": 4,
+                "buqiuren": 5,
+                "MHub": 6,
+                "github_auiowu": 7,
+                "github_mau": 8,
+                "steamautocracks_v2": 9,
+                "steamautocracks_v1": 10,
+                "sac-other": 11,
+            }
+
+            # 优先使用保存的配置，其次尝试恢复之前的选择
+            if saved_source:
+                # 如果是内置源，使用映射
+                if saved_source.lower() in source_mapping:
+                    index = source_mapping.get(saved_source.lower(), 0)
+                    if index < self.manifest_source_combo.count():
+                        self.manifest_source_combo.setCurrentIndex(index)
+                else:
+                    # 自定义仓库，通过名称查找
+                    index = self.manifest_source_combo.findText(saved_source)
+                    if index >= 0:
+                        self.manifest_source_combo.setCurrentIndex(index)
+                    else:
+                        self.manifest_source_combo.setCurrentIndex(0)
+            elif current_text:
+                # 尝试恢复之前的选择
+                index = self.manifest_source_combo.findText(current_text)
+                if index >= 0:
+                    self.manifest_source_combo.setCurrentIndex(index)
+                elif current_index < self.manifest_source_combo.count():
+                    self.manifest_source_combo.setCurrentIndex(current_index)
+            else:
+                self.manifest_source_combo.setCurrentIndex(0)
+
+            # 重新连接信号
+            self.manifest_source_combo.currentIndexChanged.connect(self.on_manifest_source_changed)
+
         except Exception as e:
-            print(f"加载清单源偏好失败: {e}")
-    
+            print(f"刷新清单源下拉框失败: {e}")
+
     def save_view_mode_preference(self):
         """保存视图模式设置"""
         try:
@@ -4339,9 +4510,11 @@ class SearchPage(ScrollArea):
         async def _fetch():
             try:
                 async with CaiBackend() as backend:
+                    steam_lang = get_steam_lang(current_language)
+                    cc = "TW" if current_language == "zh_TW" else ("US" if current_language == "en_US" else "CN")
                     r = await backend.client.get(
                         "https://store.steampowered.com/api/featuredcategories",
-                        params={"cc": "cn", "l": "schinese"},
+                        params={"cc": cc.lower(), "l": steam_lang},
                         timeout=15
                     )
                     data = r.json()
@@ -4351,7 +4524,13 @@ class SearchPage(ScrollArea):
                         for item in items:
                             appid = str(item.get("id", ""))
                             name = item.get("name", "")
-                            if appid and name and not any(g["appid"] == appid for g in games):
+                            # 检查是否已存在
+                            exists = False
+                            for g in games:
+                                if g["appid"] == appid:
+                                    exists = True
+                                    break
+                            if appid and name and not exists:
                                 games.append({"appid": appid, "name": name})
                     return games
             except Exception:
@@ -4570,11 +4749,14 @@ class SearchPage(ScrollArea):
     def sort_search_results(self, results):
         """根据排序选项对搜索结果进行排序"""
         sort_mode = self.sort_combo.currentText()
-        
+
+        def get_name(x):
+            return x['name']
+
         if sort_mode == tr("sort_az"):
-            return sorted(results, key=lambda x: x['name'])
+            return sorted(results, key=get_name)
         elif sort_mode == tr("sort_za"):
-            return sorted(results, key=lambda x: x['name'], reverse=True)
+            return sorted(results, key=get_name, reverse=True)
         else:  # 默认 - 保持原始顺序
             return results
     
@@ -4710,8 +4892,7 @@ class SearchPage(ScrollArea):
         # 获取选项
         add_all_dlc = self.add_dlc_check.isChecked()
         patch_depot_key = self.patch_key_check.isChecked()
-        patch_manifest = self.patch_manifest_check.isChecked()
-        
+
         # 获取用户选择的清单源（用索引避免文本翻译不一致问题）
         index_to_source = {
             0: "auto",
@@ -4722,11 +4903,18 @@ class SearchPage(ScrollArea):
             5: "buqiuren",
             6: "MHub",
             7: "github_auiowu",
-            8: "steamautocracks_v2",
-            9: "steamautocracks_v1",
-            10: "sac-other",
+            8: "github_mau",
+            9: "steamautocracks_v2",
+            10: "steamautocracks_v1",
+            11: "sac-other",
         }
-        tool_type = index_to_source.get(self.manifest_source_combo.currentIndex(), "auto")
+
+        current_index = self.manifest_source_combo.currentIndex()
+        if current_index <= 11:
+            tool_type = index_to_source.get(current_index, "auto")
+        else:
+            # 自定义仓库，使用名称作为 tool_type
+            tool_type = self.manifest_source_combo.currentText()
         
         # 显示入库提示
         display_name = game_name or f"AppID {appid}"
@@ -4757,91 +4945,81 @@ class SearchPage(ScrollArea):
                 
                 # 进度回调函数
                 def _progress_cb(value: int, text: str = ""):
-                    # 优化文件下载进度的文字显示
-                    if "补全清单文件" in text and value >= 85:
-                        # 只有在阶段6（值>=85）时才优化补全清单文件的进度显示
-                        if "/" in text:
-                            # 格式如 "补全清单文件 3/15：方法1（镜像源）123456_789012.manifest"
-                            parts = text.split("：")
-                            if len(parts) >= 2:
-                                file_info = parts[0]  # "补全清单文件 3/15"
-                                method_info = parts[1]  # "方法1（镜像源）123456_789012.manifest"
-                                # 提取当前文件和总文件数
-                                file_progress = file_info.split(" ")[-1]  # "3/15"
-                                # 提取方法信息
-                                method_parts = method_info.split("）")
-                                method_name = method_parts[0] + "）" if "）" in method_info else method_info
-                                # 详细显示文件下载进度
-                                detailed_text = f"阶段 6/6：下载清单文件 {file_progress} - {method_name}"
-                                self._update_download_progress_state(value, detailed_text)
-                                return
-                        elif "识别镜像源" in text:
-                            # 格式如 "补全清单文件：识别镜像源（共 15 个文件）"
-                            # 提取文件总数
-                            import re
-                            match = re.search(r'共 (\d+) 个文件', text)
-                            if match:
-                                total_files = match.group(1)
-                                self._update_download_progress_state(value, f"阶段 6/6：准备下载 {total_files} 个清单文件")
-                            else:
-                                self._update_download_progress_state(value, "阶段 6/6：准备下载清单文件")
-                            return
-                        elif "准备阶段" in text:
-                            # 格式如 "补全清单文件：准备阶段（读取 Depot 列表）"
-                            self._update_download_progress_state(value, "阶段 6/6：准备下载清单文件")
-                            return
-                    
                     # 其他进度信息保持原样
                     self._update_download_progress_state(value, text)
-                
-                # 自动选择模式：依次尝试所有ZIP源
+
+                # 自动选择模式：依次尝试所有源（sudama优先，然后是GitHub源，最后是其他ZIP源）
                 if tool_type_actual == "auto":
-                    auto_sources = [
-                        "sudama",
-                        "cysaw",
-                        "walftech",
-                        "MHub",
-                        "steamautocracks_v1",
-                        "sac-other",
+                    # 定义所有源，按优先级排序
+                    # 格式: (类型, 键/名称, 仓库/源标识)
+                    all_sources = [
+                        ("zip", "sudama", None),  # 第1: sudama (ZIP源)
+                        ("github", "github_auiowu", "Auiowu/ManifestAutoUpdate"),  # 第2: GitHub Auiowu
+                        ("github", "github_mau", "satisl/MAU"),  # 第3: GitHub MAU
+                        ("zip", "cysaw", None),
+                        ("zip", "walftech", None),
+                        ("zip", "MHub", None),
+                        ("zip", "steamautocracks_v1", None),
+                        ("zip", "sac-other", None),
                     ]
-                    
+
+                    total_sources = len(all_sources)
+
                     # 更新进度条状态
-                    self._update_download_progress_state(20, f"阶段 3/6：自动选择模式（{len(auto_sources)}个源）")
-                    
-                    for i, src in enumerate(auto_sources):
-                        backend.log.info(f"[自动选择] 正在尝试源: {src}")
-                        
-                        # 更新进度条显示当前尝试的源，并启用动画进度
-                        progress_value = 20 + (i * 60 // len(auto_sources))
-                        self._update_download_progress_state(progress_value, f"阶段 3/6：尝试源 {i+1}/{len(auto_sources)} - {src}")
-                        # 启用动画进度模式
-                        self._progress_animating = True
-                        self._progress_animation_value = float(progress_value)
-                        
-                        ok = False
-                        try:
-                            ok = await backend.process_zip_source(
-                                appid, src, unlocker_type,
-                                use_st_auto_update, add_all_dlc, patch_depot_key
-                            )
-                        except Exception as e:
-                            backend.log.warning(f"[自动选择] 源 {src} 失败: {e}")
-                        finally:
-                            # 禁用动画进度模式
-                            self._progress_animating = False
-                        
-                        if ok:
-                            # 主入库成功后，根据选项决定是否补全清单文件
-                            if patch_manifest:
-                                backend.log.info(f"[自动选择] 源 {src} 成功，开始补全清单文件...")
-                                self._update_download_progress_state(85, "阶段 4/6：主入库完成，开始补全清单文件...")
-                                post_result = await backend.complete_manifest_files(str(appid))
-                                return bool(post_result.get("success", True))
-                            else:
-                                backend.log.info(f"[自动选择] 源 {src} 成功，跳过补全清单文件（未勾选修补Manifest）")
-                                self._update_download_progress_state(90, "阶段 4/6：主入库完成，跳过补全清单文件")
+                    self._update_download_progress_state(20, f"阶段 3/6：自动选择模式（{total_sources}个源）")
+
+                    # 依次尝试所有源
+                    for i, (source_type, source_key, repo) in enumerate(all_sources):
+                        progress_value = 20 + (i * 60 // total_sources)
+
+                        if source_type == "github":
+                            backend.log.info(f"[自动选择] 正在尝试GitHub源: {repo}")
+                            self._update_download_progress_state(progress_value, f"阶段 3/6：尝试源 {i+1}/{total_sources} - GitHub ({repo.split('/')[-1]})")
+                            # 启用动画进度模式
+                            self._progress_animating = True
+                            self._progress_animation_value = float(progress_value)
+
+                            ok = False
+                            try:
+                                ok = await backend.process_github_manifest(
+                                    appid, repo, unlocker_type,
+                                    use_st_auto_update, add_all_dlc, patch_depot_key
+                                )
+                            except Exception as e:
+                                backend.log.warning(f"[自动选择] GitHub源 {repo} 失败: {e}")
+                            finally:
+                                # 禁用动画进度模式
+                                self._progress_animating = False
+
+                            if ok:
+                                backend.log.info(f"[自动选择] GitHub源 {repo} 成功")
+                                self._update_download_progress_state(90, "阶段 4/6：主入库完成")
                                 return True
-                    
+                        else:
+                            # ZIP源
+                            backend.log.info(f"[自动选择] 正在尝试ZIP源: {source_key}")
+                            self._update_download_progress_state(progress_value, f"阶段 3/6：尝试源 {i+1}/{total_sources} - {source_key}")
+                            # 启用动画进度模式
+                            self._progress_animating = True
+                            self._progress_animation_value = float(progress_value)
+
+                            ok = False
+                            try:
+                                ok = await backend.process_zip_source(
+                                    appid, source_key, unlocker_type,
+                                    use_st_auto_update, add_all_dlc, patch_depot_key
+                                )
+                            except Exception as e:
+                                backend.log.warning(f"[自动选择] ZIP源 {source_key} 失败: {e}")
+                            finally:
+                                # 禁用动画进度模式
+                                self._progress_animating = False
+
+                            if ok:
+                                backend.log.info(f"[自动选择] ZIP源 {source_key} 成功")
+                                self._update_download_progress_state(90, "阶段 4/6：主入库完成")
+                                return True
+
                     # 所有源都失败
                     self._update_download_progress_state(80, "阶段 3/6：所有源尝试失败")
                     return False
@@ -4851,9 +5029,61 @@ class SearchPage(ScrollArea):
                     "github_auiowu": "Auiowu/ManifestAutoUpdate",
                 }
                 zip_sources = ["cysaw", "gmrc", "sac-other", "walftech", "steamautocracks_v2", "steamautocracks_v1", "sudama", "buqiuren", "MHub"]
-                
-                # 更新进度条状态，并启用动画进度模式
-                if tool_type_actual in zip_sources:
+
+                # 检查是否为自定义仓库（索引大于10）
+                is_custom_repo = self.manifest_source_combo.currentIndex() > 10
+
+                if is_custom_repo:
+                    # 自定义仓库处理
+                    repo_name = tool_type_actual
+                    self._update_download_progress_state(20, f"阶段 3/6：主入库流程（自定义源：{repo_name}）")
+                    self._progress_animating = True
+                    self._progress_animation_value = 20.0
+                    try:
+                        # 获取自定义仓库配置
+                        config_path = APP_ROOT / 'config' / 'config.json'
+                        custom_github_repos = []
+                        custom_zip_repos = []
+                        if config_path.exists():
+                            import json
+                            with open(config_path, 'r', encoding='utf-8') as f:
+                                config = json.load(f)
+                            custom_repos = config.get("Custom_Repos", {"github": [], "zip": []})
+                            custom_github_repos = custom_repos.get("github", [])
+                            custom_zip_repos = custom_repos.get("zip", [])
+
+                        # 检查是否为自定义GitHub仓库
+                        github_repo = None
+                        for repo in custom_github_repos:
+                            if repo.get("name") == repo_name:
+                                github_repo = repo.get("repo")
+                                break
+
+                        if github_repo:
+                            # 自定义GitHub仓库
+                            success = await backend.process_github_manifest(
+                                appid, github_repo, unlocker_type,
+                                use_st_auto_update, add_all_dlc, patch_depot_key
+                            )
+                        else:
+                            # 检查是否为自定义ZIP仓库
+                            zip_repo_config = None
+                            for repo in custom_zip_repos:
+                                if repo.get("name") == repo_name:
+                                    zip_repo_config = repo
+                                    break
+
+                            if zip_repo_config:
+                                # 自定义ZIP仓库
+                                success = await backend.process_custom_zip_manifest(
+                                    appid, zip_repo_config, add_all_dlc, patch_depot_key
+                                )
+                            else:
+                                backend.log.error(f"未找到自定义仓库配置: {repo_name}")
+                                success = False
+                    finally:
+                        self._progress_animating = False
+                elif tool_type_actual in zip_sources:
                     self._update_download_progress_state(20, f"阶段 3/6：主入库流程（清单源：{tool_type_actual}）")
                     # 启用动画进度模式
                     self._progress_animating = True
@@ -4883,15 +5113,9 @@ class SearchPage(ScrollArea):
                 
                 # 主入库成功后，根据选项决定是否补全清单文件
                 if success:
-                    if patch_manifest:
-                        backend.log.info(f"主入库成功，开始补全清单文件...")
-                        self._update_download_progress_state(58, "阶段 4/6：主入库完成，开始补全清单文件...")
-                        post_result = await backend.complete_manifest_files(str(appid))
-                        return bool(post_result.get("success", True))
-                    else:
-                        backend.log.info(f"主入库成功，跳过补全清单文件（未勾选修补Manifest）")
-                        self._update_download_progress_state(58, "阶段 4/6：主入库完成，跳过补全清单文件")
-                        return True
+                    backend.log.info(f"主入库成功")
+                    self._update_download_progress_state(90, "阶段 4/6：主入库完成")
+                    return True
                 
                 return success
         
@@ -4966,16 +5190,16 @@ class SearchPage(ScrollArea):
     def on_unlock_complete(self, success):
         """入库完成"""
         self.unlock_worker = None
-        
+
         # 完成下载进度条
         if success:
             self._finish_download_progress(True, "入库完成！")
         else:
             self._finish_download_progress(False, "入库失败，请查看日志或尝试其他清单源")
-        
+
         # 始终显示在主窗口，不受当前页面限制
         bar_parent = self.window()
-        
+
         if success:
             InfoBar.success(
                 title=tr("add_success"),
@@ -4985,6 +5209,10 @@ class SearchPage(ScrollArea):
                 duration=3000
             )
             self.notify_home_refresh()
+            
+            # 后台获取并缓存游戏封面和名称
+            if hasattr(self, 'current_appid') and self.current_appid:
+                self._cache_game_info_after_add(self.current_appid)
         else:
             InfoBar.error(
                 title=tr("delete_failed"),
@@ -4992,6 +5220,44 @@ class SearchPage(ScrollArea):
                 parent=bar_parent,
                 position=InfoBarPosition.TOP
             )
+    
+    def _cache_game_info_after_add(self, appid: str):
+        """入库成功后后台获取并缓存游戏封面和名称"""
+        async def _fetch_and_cache():
+            from backend.cai_backend import CaiBackend
+            
+            try:
+                async with CaiBackend() as backend:
+                    await backend.initialize()
+                    
+                    # 获取游戏信息
+                    game_info = await backend.get_game_info_by_appid(appid)
+                    if game_info:
+                        # 缓存游戏名称
+                        game_name = game_info.get("name", "")
+                        if game_name:
+                            _cache_name(appid, game_name)
+                        
+                        # 获取封面图片URL
+                        cover_url = game_info.get("header_image", f"https://cdn.cloudflare.steamstatic.com/steam/apps/{appid}/header.jpg")
+                        
+                        # 下载并缓存封面图片
+                        try:
+                            import aiohttp
+                            async with aiohttp.ClientSession() as session:
+                                async with session.get(cover_url, timeout=10) as response:
+                                    if response.status == 200:
+                                        cover_data = await response.read()
+                                        _cache_cover(appid, cover_data)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+        
+        # 在后台执行，不阻塞UI
+        worker = AsyncWorker(_fetch_and_cache())
+        worker.finished.connect(worker.deleteLater)
+        worker.start()
     
     @pyqtSlot(str)
     def on_unlock_error(self, error):
@@ -5025,11 +5291,17 @@ class SearchPage(ScrollArea):
 
 
 class SettinsCard(GroupHeaderCardWidget):
-    
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setTitle(tr("basic_settings"))
         self.setBorderRadius(8)
+        self.setStyleSheet("""
+            SettinsCard {
+                border: none;
+                background: transparent;
+            }
+        """)
 
         # Steam路径设置
         self.steam_path_edit = LineEdit()
@@ -5113,6 +5385,426 @@ class SettinsCard(GroupHeaderCardWidget):
             self.steam_path_edit.setText(folder_path)
 
 
+class RepoListItem(CardWidget):
+    """仓库列表项 - 自定义卡片样式"""
+    delete_clicked = pyqtSignal()  # 删除按钮点击信号
+
+    def __init__(self, name: str, path: str, parent=None):
+        super().__init__(parent)
+        self.name = name
+        self.path = path
+        self.setFixedHeight(60)
+        self._setup_ui()
+
+    def _setup_ui(self):
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(8)
+
+        # 信息区域
+        info_layout = QVBoxLayout()
+        info_layout.setSpacing(2)
+
+        self.name_label = BodyLabel(self.name)
+        info_layout.addWidget(self.name_label)
+
+        self.path_label = CaptionLabel(self.path)
+        self.path_label.setStyleSheet("color: gray;")
+        info_layout.addWidget(self.path_label)
+
+        layout.addLayout(info_layout, 1)
+
+        # 删除按钮
+        self.delete_btn = TransparentToolButton(FluentIcon.DELETE)
+        self.delete_btn.setFixedSize(32, 32)
+        self.delete_btn.clicked.connect(self.delete_clicked.emit)
+        layout.addWidget(self.delete_btn)
+
+
+class RepoListCard(CardWidget):
+    """仓库列表卡片 - 完全自定义实现"""
+
+    folderChanged = pyqtSignal(list)  # 仓库列表变化信号
+
+    def __init__(self, title: str, desc: str, icon=None, parent=None):
+        super().__init__(parent)
+        self.title = title
+        self.desc = desc
+        self.icon = icon or FluentIcon.LIBRARY
+        self.repos = []
+        self._setup_ui()
+
+    def _setup_ui(self):
+        self.setBorderRadius(8)
+        
+        # 主布局
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+
+        # 标题区域
+        header_layout = QHBoxLayout()
+        header_layout.setSpacing(12)
+
+        # 图标
+        icon_widget = IconWidget(self.icon)
+        icon_widget.setFixedSize(20, 20)
+        header_layout.addWidget(icon_widget)
+
+        # 标题和描述
+        title_layout = QVBoxLayout()
+        title_layout.setSpacing(2)
+
+        title_label = BodyLabel(self.title)
+        title_label.setStyleSheet("font-weight: bold;")
+        title_layout.addWidget(title_label)
+
+        if self.desc:
+            desc_label = CaptionLabel(self.desc)
+            desc_label.setStyleSheet("color: gray;")
+            title_layout.addWidget(desc_label)
+
+        header_layout.addLayout(title_layout, 1)
+
+        # 添加按钮
+        self.add_btn = PushButton(tr("add"))
+        self.add_btn.setFixedWidth(80)
+        self.add_btn.setIcon(FluentIcon.ADD)
+        self.add_btn.clicked.connect(self._show_add_dialog)
+        header_layout.addWidget(self.add_btn)
+
+        layout.addLayout(header_layout)
+
+        # 分隔线
+        line = QWidget()
+        line.setFixedHeight(1)
+        line.setStyleSheet("background-color: rgba(128, 128, 128, 0.2);")
+        layout.addWidget(line)
+
+        # 仓库列表区域
+        self.list_widget = QWidget()
+        self.list_layout = QVBoxLayout(self.list_widget)
+        self.list_layout.setContentsMargins(0, 8, 0, 8)
+        self.list_layout.setSpacing(8)
+        self.list_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        layout.addWidget(self.list_widget)
+        layout.addStretch(1)
+
+    def set_repos(self, repos: list):
+        """设置仓库列表"""
+        self.repos = repos.copy()
+        self._refresh_list()
+
+    def get_repos(self) -> list:
+        """获取仓库列表"""
+        return self.repos.copy()
+
+    def _refresh_list(self):
+        """刷新列表显示"""
+        # 清空现有项 - 使用递归删除确保彻底清理
+        self._clear_layout(self.list_layout)
+
+        # 添加仓库项
+        if not self.repos:
+            empty_label = CaptionLabel(tr("no_repos"))
+            empty_label.setStyleSheet("color: gray; padding: 16px 0;")
+            empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.list_layout.addWidget(empty_label)
+        else:
+            for i, repo in enumerate(self.repos):
+                name = repo.get("name", "")
+                path = repo.get("repo", "") or repo.get("url", "")
+                item = RepoListItem(name, path)
+                item.delete_clicked.connect(lambda checked=False, idx=i: self._delete_repo(idx))
+                self.list_layout.addWidget(item)
+        
+        # 强制更新布局
+        self.list_widget.update()
+        self.update()
+
+    def _clear_layout(self, layout):
+        """递归清空布局中的所有 widget"""
+        if layout is None:
+            return
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.setParent(None)
+                widget.deleteLater()
+            elif item.layout():
+                self._clear_layout(item.layout())
+
+    def _delete_repo(self, index: int):
+        """删除仓库"""
+        if 0 <= index < len(self.repos):
+            self.repos.pop(index)
+            self._refresh_list()
+            self.folderChanged.emit(self.repos)
+
+    def _show_add_dialog(self):
+        """显示添加对话框 - 子类实现"""
+        pass
+
+
+class AddRepoDialog(QDialog):
+    """添加仓库对话框 - 独立窗口"""
+
+    def __init__(self, title: str, is_github: bool = True, parent=None):
+        super().__init__(parent)
+        self.is_github = is_github
+        self.setWindowTitle(title)
+        self.setFixedSize(500, 280)
+        self._setup_ui()
+
+    def _setup_ui(self):
+        # 根据主题设置背景色
+        if isDarkTheme():
+            bg_color = "#2b2b2b"
+            text_color = "#ffffff"
+        else:
+            bg_color = "#f5f5f5"
+            text_color = "#333333"
+        
+        # 设置对话框背景色 - 不使用WA_TranslucentBackground
+        self.setStyleSheet(f"""
+            QDialog {{
+                background-color: {bg_color};
+            }}
+        """)
+        
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(16)
+
+        # 标题
+        title_label = SubtitleLabel(self.windowTitle())
+        layout.addWidget(title_label)
+
+        # 名称输入
+        name_layout = QHBoxLayout()
+        name_label = BodyLabel(tr("repo_name"))
+        name_label.setFixedWidth(80)
+        name_layout.addWidget(name_label)
+        self.name_edit = LineEdit()
+        self.name_edit.setPlaceholderText(tr("repo_name_placeholder"))
+        name_layout.addWidget(self.name_edit)
+        layout.addLayout(name_layout)
+
+        # 路径/URL输入
+        path_layout = QHBoxLayout()
+        if self.is_github:
+            path_label = BodyLabel(tr("repo_path"))
+            self.path_edit = LineEdit()
+            self.path_edit.setPlaceholderText(tr("github_repo_placeholder"))
+        else:
+            path_label = BodyLabel(tr("repo_url"))
+            self.path_edit = LineEdit()
+            self.path_edit.setPlaceholderText(tr("zip_url_placeholder"))
+        path_label.setFixedWidth(80)
+        path_layout.addWidget(path_label)
+        path_layout.addWidget(self.path_edit)
+        layout.addLayout(path_layout)
+
+        # 提示文本
+        if self.is_github:
+            hint_label = CaptionLabel(tr("github_repo_hint"))
+        else:
+            hint_label = CaptionLabel(tr("zip_url_hint"))
+        hint_label.setStyleSheet("color: gray;")
+        hint_label.setWordWrap(True)
+        layout.addWidget(hint_label)
+
+        layout.addStretch(1)
+
+        # 按钮区域
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch(1)
+        
+        self.cancel_btn = PushButton(tr("cancel"))
+        self.cancel_btn.setFixedWidth(100)
+        self.cancel_btn.clicked.connect(self.reject)
+        btn_layout.addWidget(self.cancel_btn)
+
+        self.save_btn = PrimaryPushButton(tr("save"))
+        self.save_btn.setFixedWidth(100)
+        self.save_btn.clicked.connect(self.accept)
+        btn_layout.addWidget(self.save_btn)
+
+        layout.addLayout(btn_layout)
+
+    def get_data(self):
+        """获取输入的数据"""
+        return self.name_edit.text().strip(), self.path_edit.text().strip()
+
+
+class GitHubRepoCard(RepoListCard):
+    """GitHub仓库列表卡片"""
+
+    def __init__(self, parent=None):
+        super().__init__(
+            tr("github_repos"),
+            tr("github_repos_desc"),
+            FluentIcon.GITHUB,
+            parent
+        )
+
+    def _show_add_dialog(self):
+        """显示添加GitHub仓库对话框"""
+        dialog = AddRepoDialog(tr("add_github_repo"), is_github=True, parent=self)
+        
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            name, repo_path = dialog.get_data()
+
+            if not name or not repo_path:
+                InfoBar.warning(
+                    title=tr("input_incomplete"),
+                    content=tr("please_fill_all_fields"),
+                    parent=self,
+                    position=InfoBarPosition.TOP
+                )
+                return
+
+            if "/" not in repo_path:
+                InfoBar.warning(
+                    title=tr("invalid_format"),
+                    content=tr("github_format_hint"),
+                    parent=self,
+                    position=InfoBarPosition.TOP
+                )
+                return
+
+            # 检查重复
+            for repo in self.repos:
+                if repo.get("name") == name or repo.get("repo") == repo_path:
+                    InfoBar.warning(
+                        title=tr("repo_exists"),
+                        content=tr("repo_already_added"),
+                        parent=self,
+                        position=InfoBarPosition.TOP
+                    )
+                    return
+
+            self.repos.append({"name": name, "repo": repo_path})
+            self._refresh_list()
+            self.folderChanged.emit(self.repos)
+
+            InfoBar.success(
+                title=tr("add_success"),
+                content=tr("github_repo_added"),
+                parent=self,
+                position=InfoBarPosition.TOP
+            )
+
+
+class ZipRepoCard(RepoListCard):
+    """ZIP仓库列表卡片"""
+
+    def __init__(self, parent=None):
+        super().__init__(
+            tr("zip_repos"),
+            tr("zip_repos_desc"),
+            FluentIcon.ZIP_FOLDER,
+            parent
+        )
+
+    def _show_add_dialog(self):
+        """显示添加ZIP仓库对话框"""
+        dialog = AddRepoDialog(tr("add_zip_repo"), is_github=False, parent=self)
+        
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            name, url = dialog.get_data()
+
+            if not name or not url:
+                InfoBar.warning(
+                    title=tr("input_incomplete"),
+                    content=tr("please_fill_all_fields"),
+                    parent=self,
+                    position=InfoBarPosition.TOP
+                )
+                return
+
+            if "{app_id}" not in url:
+                InfoBar.warning(
+                    title=tr("invalid_format"),
+                    content=tr("zip_format_hint"),
+                    parent=self,
+                    position=InfoBarPosition.TOP
+                )
+                return
+
+            # 检查重复
+            for repo in self.repos:
+                if repo.get("name") == name or repo.get("url") == url:
+                    InfoBar.warning(
+                        title=tr("repo_exists"),
+                        content=tr("repo_already_added"),
+                        parent=self,
+                        position=InfoBarPosition.TOP
+                    )
+                    return
+
+            self.repos.append({"name": name, "url": url})
+            self._refresh_list()
+            self.folderChanged.emit(self.repos)
+
+            InfoBar.success(
+                title=tr("add_success"),
+                content=tr("zip_repo_added"),
+                parent=self,
+                position=InfoBarPosition.TOP
+            )
+
+
+class CustomReposCard(QWidget):
+    """自定义清单库卡片 - 包含GitHub和ZIP两种仓库列表"""
+
+    repos_changed = pyqtSignal()  # 仓库列表变化信号
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.github_repos = []
+        self.zip_repos = []
+        self._setup_ui()
+
+    def _setup_ui(self):
+        self.layout = QVBoxLayout(self)
+        self.layout.setContentsMargins(0, 0, 0, 0)
+        self.layout.setSpacing(16)
+
+        # GitHub仓库列表卡片
+        self.github_card = GitHubRepoCard(self)
+        self.github_card.folderChanged.connect(self._on_github_changed)
+        self.layout.addWidget(self.github_card)
+
+        # ZIP仓库列表卡片
+        self.zip_card = ZipRepoCard(self)
+        self.zip_card.folderChanged.connect(self._on_zip_changed)
+        self.layout.addWidget(self.zip_card)
+
+    def set_repos(self, github_repos: list, zip_repos: list):
+        """设置仓库列表"""
+        self.github_repos = github_repos.copy()
+        self.zip_repos = zip_repos.copy()
+        self.github_card.set_repos(self.github_repos)
+        self.zip_card.set_repos(self.zip_repos)
+
+    def get_repos(self):
+        """获取仓库列表"""
+        return self.github_card.get_repos(), self.zip_card.get_repos()
+
+    def _on_github_changed(self, repos: list):
+        """GitHub仓库列表变化"""
+        self.github_repos = repos
+        self.repos_changed.emit()
+
+    def _on_zip_changed(self, repos: list):
+        """ZIP仓库列表变化"""
+        self.zip_repos = repos
+        self.repos_changed.emit()
+
+
 # ===== 联机游戏页面 =====
 class LauncherLogWorker(QThread):
     """联机日志轮询线程"""
@@ -5136,7 +5828,7 @@ class LauncherLogWorker(QThread):
 
 
 class LauncherPage(ScrollArea):
-    """联机游戏页面 - 支持 DLL 注入 / BAT 脚本两种方式"""
+    """联机游戏页面 - 支持 DLL 注入 / BAT 脚本 / AppID Changer 三种方式"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -5144,6 +5836,7 @@ class LauncherPage(ScrollArea):
         self.setWidgetResizable(True)
 
         self._service: Optional[SystemCoreService] = None
+        self._changer_service: Optional[AppIDChangerService] = None
         self._log_worker: Optional[LauncherLogWorker] = None
         self._running = False
         self._log_lines = []
@@ -5170,6 +5863,12 @@ class LauncherPage(ScrollArea):
 
         # ── 模式选择卡片 ──
         mode_card = CardWidget(self)
+        mode_card.setStyleSheet("""
+            CardWidget {
+                border: none;
+                background: transparent;
+            }
+        """)
         mode_layout = QVBoxLayout(mode_card)
         mode_layout.setContentsMargins(20, 16, 20, 16)
         mode_layout.setSpacing(10)
@@ -5177,15 +5876,19 @@ class LauncherPage(ScrollArea):
 
         self.mode_dll_btn = PushButton(tr("launcher_mode_dll"), mode_card)
         self.mode_bat_btn = PushButton(tr("launcher_mode_bat"), mode_card)
+        self.mode_changer_btn = PushButton(tr("launcher_mode_changer"), mode_card)
         self.mode_dll_btn.setCheckable(True)
         self.mode_bat_btn.setCheckable(True)
+        self.mode_changer_btn.setCheckable(True)
         self.mode_dll_btn.setChecked(True)  # 默认 DLL 模式
         self.mode_dll_btn.clicked.connect(lambda: self._select_mode("dll"))
         self.mode_bat_btn.clicked.connect(lambda: self._select_mode("bat"))
+        self.mode_changer_btn.clicked.connect(lambda: self._select_mode("changer"))
 
         mode_btn_row = QHBoxLayout()
         mode_btn_row.addWidget(self.mode_dll_btn)
         mode_btn_row.addWidget(self.mode_bat_btn)
+        mode_btn_row.addWidget(self.mode_changer_btn)
         mode_layout.addLayout(mode_btn_row)
 
         self.mode_desc_label = CaptionLabel(tr("launcher_mode_dll_desc"), mode_card)
@@ -5196,6 +5899,12 @@ class LauncherPage(ScrollArea):
 
         # ── 游戏路径卡片 ──
         path_card = CardWidget(self)
+        path_card.setStyleSheet("""
+            CardWidget {
+                border: none;
+                background: transparent;
+            }
+        """)
         path_layout = QVBoxLayout(path_card)
         path_layout.setContentsMargins(20, 16, 20, 16)
         path_layout.setSpacing(10)
@@ -5235,6 +5944,12 @@ class LauncherPage(ScrollArea):
 
         # ── 日志卡片 ──
         log_card = CardWidget(self)
+        log_card.setStyleSheet("""
+            CardWidget {
+                border: none;
+                background: transparent;
+            }
+        """)
         log_layout = QVBoxLayout(log_card)
         log_layout.setContentsMargins(20, 16, 20, 16)
         log_layout.setSpacing(8)
@@ -5275,13 +5990,18 @@ class LauncherPage(ScrollArea):
         self._current_mode = mode
         self.mode_dll_btn.setChecked(mode == "dll")
         self.mode_bat_btn.setChecked(mode == "bat")
+        self.mode_changer_btn.setChecked(mode == "changer")
         if mode == "dll":
             self.mode_desc_label.setText(tr("launcher_mode_dll_desc"))
             self.action_btn.setText(tr("launcher_start"))
             self.action_btn.setIcon(FluentIcon.PLAY)
-        else:
+        elif mode == "bat":
             self.mode_desc_label.setText(tr("launcher_mode_bat_desc"))
             self.action_btn.setText(tr("launcher_bat_start"))
+            self.action_btn.setIcon(FluentIcon.PLAY)
+        else:  # changer
+            self.mode_desc_label.setText(tr("launcher_mode_changer_desc"))
+            self.action_btn.setText(tr("launcher_changer_start"))
             self.action_btn.setIcon(FluentIcon.PLAY)
 
     def _log(self, msg: str):
@@ -5335,6 +6055,7 @@ class LauncherPage(ScrollArea):
         self.browse_btn.setEnabled(not running)
         self.mode_dll_btn.setEnabled(not running)
         self.mode_bat_btn.setEnabled(not running)
+        self.mode_changer_btn.setEnabled(not running)
         if running:
             self.action_btn.setText(tr("launcher_stop"))
             self.action_btn.setIcon(FluentIcon.CLOSE)
@@ -5343,8 +6064,10 @@ class LauncherPage(ScrollArea):
         else:
             if self._current_mode == "dll":
                 self.action_btn.setText(tr("launcher_start"))
-            else:
+            elif self._current_mode == "bat":
                 self.action_btn.setText(tr("launcher_bat_start"))
+            else:  # changer
+                self.action_btn.setText(tr("launcher_changer_start"))
             self.action_btn.setIcon(FluentIcon.PLAY)
             self.status_label.setText(tr("launcher_status_ready"))
             self.status_label.setTextColor("#10b981", "#10b981")
@@ -5354,8 +6077,10 @@ class LauncherPage(ScrollArea):
             self._stop_service()
         elif self._current_mode == "dll":
             self._start_dll_service()
-        else:
+        elif self._current_mode == "bat":
             self._start_bat_service()
+        else:  # changer
+            self._start_changer_service()
 
     # ── DLL 注入模式 ──
 
@@ -5399,6 +6124,9 @@ class LauncherPage(ScrollArea):
             self._service.stop()
             self._service.stop_routine()
             self._service = None
+        if self._changer_service:
+            self._changer_service.stop()
+            self._changer_service = None
         self._set_running(False)
         self._log(tr("launcher_service_stopped"))
 
@@ -5439,6 +6167,29 @@ class LauncherPage(ScrollArea):
         except Exception as e:
             self._log(f"❌ BAT 启动失败: {e}")
             InfoBar.error(title=tr("launcher_error"), content=str(e), parent=self, position=InfoBarPosition.TOP)
+
+    # ── AppID Changer 模式 ──
+
+    def _start_changer_service(self):
+        exe_path = self.exe_input.text().strip()
+        app_id = self.appid_input.text().strip() or "480"
+        if not exe_path or not os.path.exists(exe_path):
+            InfoBar.warning(title="提示", content=tr("launcher_no_exe"), parent=self, position=InfoBarPosition.TOP)
+            return
+        if not app_id.isdigit():
+            InfoBar.warning(title="参数错误", content="AppID 必须为数字", parent=self, position=InfoBarPosition.TOP)
+            return
+
+        self._changer_service = AppIDChangerService(self._log)
+        self._set_running(True)
+        self._log(f"-> 启动 AppID Changer 联机 | AppID: {app_id}")
+
+        def on_finish():
+            # 回到主线程更新 UI
+            from PyQt6.QtCore import QMetaObject, Qt as _Qt
+            QMetaObject.invokeMethod(self, "_on_service_finished", _Qt.ConnectionType.QueuedConnection)
+
+        self._changer_service.start_service(exe_path, app_id, on_finish)
 
 
 # ============================================================
@@ -5532,6 +6283,12 @@ class TrainerPage(ScrollArea):
 
         # 搜索卡片
         search_card = CardWidget(self)
+        search_card.setStyleSheet("""
+            CardWidget {
+                border: none;
+                background: transparent;
+            }
+        """)
         search_layout = QVBoxLayout(search_card)
         search_layout.setContentsMargins(20, 16, 20, 16)
         search_layout.setSpacing(10)
@@ -5577,6 +6334,12 @@ class TrainerPage(ScrollArea):
 
         # 已安装修改器卡片
         installed_card = CardWidget(self)
+        installed_card.setStyleSheet("""
+            CardWidget {
+                border: none;
+                background: transparent;
+            }
+        """)
         installed_layout = QVBoxLayout(installed_card)
         installed_layout.setContentsMargins(20, 16, 20, 16)
         installed_layout.setSpacing(10)
@@ -5604,6 +6367,12 @@ class TrainerPage(ScrollArea):
 
         # 日志卡片
         log_card = CardWidget(self)
+        log_card.setStyleSheet("""
+            CardWidget {
+                border: none;
+                background: transparent;
+            }
+        """)
         log_layout = QVBoxLayout(log_card)
         log_layout.setContentsMargins(20, 16, 20, 16)
         log_layout.setSpacing(8)
@@ -5819,10 +6588,1456 @@ class TrainerPage(ScrollArea):
         pass
 
 
+class DrmPage(ScrollArea):
+    """D加密授权页面 - 使用 SegmentedWidget 切换功能模块"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("drmPage")
+        self.setWidgetResizable(True)
+        self._cw_result = None
+
+        container = QWidget()
+        container.setObjectName("drmContainer")
+        self.setWidget(container)
+        self.setStyleSheet("DrmPage { background: transparent; }")
+        container.setStyleSheet("QWidget#drmContainer { background: transparent; }")
+
+        self.main_layout = QVBoxLayout(container)
+        self.main_layout.setContentsMargins(30, 60, 30, 8)
+        self.main_layout.setSpacing(2)
+
+        self.main_layout.addWidget(SubtitleLabel(tr("drm_page_title"), self))
+
+        # 创建 SegmentedWidget 用于切换功能模块
+        self.segmented_widget = SegmentedWidget(self)
+        self.segmented_widget.setStyleSheet("""
+            SegmentedWidget {
+                background: transparent;
+            }
+        """)
+        self.main_layout.addWidget(self.segmented_widget)
+
+        # 创建 QStackedWidget 用于切换页面内容
+        self.stacked_widget = QStackedWidget(self)
+        self.main_layout.addWidget(self.stacked_widget)
+
+        # 创建三个功能页面
+        self._init_gbe_page()
+        self._init_gl_page()
+        self._init_extractor_page()
+
+        # 添加标签项到 SegmentedWidget
+        self.segmented_widget.addItem(
+            routeKey="gbe",
+            text="GBE模式",
+            onClick=lambda: self.stacked_widget.setCurrentIndex(0)
+        )
+        self.segmented_widget.addItem(
+            routeKey="gl",
+            text="GL模式",
+            onClick=lambda: self.stacked_widget.setCurrentIndex(1)
+        )
+        self.segmented_widget.addItem(
+            routeKey="extractor",
+            text="CW提取工具",
+            onClick=lambda: self.stacked_widget.setCurrentIndex(2)
+        )
+
+        # 设置默认选中项
+        self.segmented_widget.setCurrentItem("gbe")
+        self.stacked_widget.setCurrentIndex(0)
+
+        # 连接信号
+        self.stacked_widget.currentChanged.connect(self._on_page_changed)
+
+    def _on_page_changed(self, index):
+        """页面切换时更新 SegmentedWidget"""
+        route_keys = ["gbe", "gl", "extractor"]
+        if 0 <= index < len(route_keys):
+            self.segmented_widget.setCurrentItem(route_keys[index])
+
+    def _init_gbe_page(self):
+        """初始化 GBE 模式页面"""
+        page = QWidget()
+        page.setObjectName("gbePage")
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 16, 0, 0)
+        layout.setSpacing(16)
+
+        # 授权获取卡片
+        auth_card = GroupHeaderCardWidget(page)
+        auth_card.setTitle("步骤 1: 获取授权文件")
+        auth_card.setBorderRadius(8)
+        auth_card.setStyleSheet("""
+            GroupHeaderCardWidget {
+                border: none;
+                background: transparent;
+            }
+        """)
+
+        # 选择 CW 文件
+        file_row = QWidget()
+        file_row_layout = QHBoxLayout(file_row)
+        file_row_layout.setContentsMargins(0, 0, 0, 0)
+        self.cw_path_edit = LineEdit()
+        self.cw_path_edit.setPlaceholderText(tr("drm_cw_placeholder"))
+        self.cw_path_edit.setReadOnly(True)
+        browse_btn = PushButton(tr("drm_browse"))
+        browse_btn.setFixedWidth(70)
+        browse_btn.clicked.connect(self._browse_cw)
+        decrypt_btn = PrimaryPushButton(tr("drm_decrypt"))
+        decrypt_btn.setFixedWidth(70)
+        decrypt_btn.clicked.connect(self._decrypt_cw)
+        file_row_layout.addWidget(self.cw_path_edit)
+        file_row_layout.addWidget(browse_btn)
+        file_row_layout.addWidget(decrypt_btn)
+        auth_card.addGroup(FluentIcon.DOCUMENT, tr("drm_cw_file"), tr("drm_cw_file_hint"), file_row)
+
+        # 授权码下载
+        code_row = QWidget()
+        code_row_layout = QHBoxLayout(code_row)
+        code_row_layout.setContentsMargins(0, 0, 0, 0)
+        self.auth_code_edit = LineEdit()
+        self.auth_code_edit.setPlaceholderText(tr("drm_auth_code_placeholder"))
+        dl_btn = PrimaryPushButton(tr("drm_download_decrypt"))
+        dl_btn.setFixedWidth(100)
+        dl_btn.clicked.connect(self._download_by_code)
+        code_row_layout.addWidget(self.auth_code_edit)
+        code_row_layout.addWidget(dl_btn)
+        auth_card.addGroup(FluentIcon.CLOUD_DOWNLOAD, tr("drm_auth_code"), tr("drm_auth_code_hint"), code_row)
+
+        # 授权网站链接
+        links_row = QWidget()
+        links_layout = QHBoxLayout(links_row)
+        links_layout.setContentsMargins(0, 0, 0, 0)
+        links_layout.addWidget(HyperlinkButton("https://drm.steam.run", "stool 授权网站"))
+        links_layout.addWidget(HyperlinkButton("https://steam.sakuranoyuki.de5.net", "四星授权网站"))
+        links_layout.addStretch(1)
+        auth_card.addGroup(FluentIcon.LINK, tr("drm_online_auth"), tr("drm_online_auth_hint"), links_row)
+
+        layout.addWidget(auth_card)
+
+        # 授权信息展示卡片
+        self.info_card = GroupHeaderCardWidget(page)
+        self.info_card.setTitle(tr("drm_info_title"))
+        self.info_card.setBorderRadius(8)
+        self.info_card.setStyleSheet("""
+            GroupHeaderCardWidget {
+                border: none;
+                background: transparent;
+            }
+        """)
+        self.info_card.hide()
+
+        self.info_appid = BodyLabel("-")
+        self.info_steamid = BodyLabel("-")
+        self.info_start = BodyLabel("-")
+        self.info_end = BodyLabel("-")
+        self.info_card.addGroup(FluentIcon.TAG, "AppID", "", self.info_appid)
+        self.info_card.addGroup(FluentIcon.PEOPLE, "SteamID", "", self.info_steamid)
+        self.info_card.addGroup(FluentIcon.CALENDAR, tr("drm_valid_from"), "", self.info_start)
+        self.info_card.addGroup(FluentIcon.CALENDAR, tr("drm_valid_to"), "", self.info_end)
+        layout.addWidget(self.info_card)
+
+        # GBE 模式配置卡片
+        gbe_config_card = GroupHeaderCardWidget(page)
+        gbe_config_card.setTitle("步骤 2: GBE模式配置")
+        gbe_config_card.setBorderRadius(8)
+        gbe_config_card.setStyleSheet("""
+            GroupHeaderCardWidget {
+                border: none;
+                background: transparent;
+            }
+        """)
+
+        # 游戏启动程序选择
+        exe_row = QWidget()
+        exe_row_layout = QHBoxLayout(exe_row)
+        exe_row_layout.setContentsMargins(0, 0, 0, 0)
+        self.gbe_exe_edit = LineEdit()
+        self.gbe_exe_edit.setPlaceholderText("选择游戏的 .exe 文件")
+        self.gbe_exe_edit.setReadOnly(True)
+        exe_browse_btn = PushButton("浏览")
+        exe_browse_btn.setFixedWidth(70)
+        exe_browse_btn.clicked.connect(self._browse_gbe_exe)
+        exe_row_layout.addWidget(self.gbe_exe_edit)
+        exe_row_layout.addWidget(exe_browse_btn)
+        gbe_config_card.addGroup(FluentIcon.FOLDER, "游戏启动程序", "选择需要授权的游戏可执行文件", exe_row)
+
+        # DLC 列表配置
+        dlc_row = QWidget()
+        dlc_row_layout = QHBoxLayout(dlc_row)
+        dlc_row_layout.setContentsMargins(0, 0, 0, 0)
+        self.gbe_dlc_edit = LineEdit()
+        self.gbe_dlc_edit.setPlaceholderText("输入DLC ID，多个用逗号分隔 (如: 123,456,789)")
+        self.gbe_lua_check = CheckBox("使用LUA DLC")
+        dlc_row_layout.addWidget(self.gbe_dlc_edit, stretch=1)
+        dlc_row_layout.addWidget(self.gbe_lua_check)
+        gbe_config_card.addGroup(FluentIcon.TAG, "DLC列表 (可选)", "输入额外的DLC ID", dlc_row)
+
+        layout.addWidget(gbe_config_card)
+
+        # 开始授权按钮
+        self.gbe_auth_btn = PrimaryPushButton("开始授权 (GBE模式)")
+        self.gbe_auth_btn.setIcon(FluentIcon.CERTIFICATE)
+        self.gbe_auth_btn.setEnabled(False)
+        self.gbe_auth_btn.clicked.connect(self._authorize_gbe)
+        layout.addWidget(self.gbe_auth_btn)
+
+        # 日志卡片
+        log_card = CardWidget(page)
+        log_card.setStyleSheet("""
+            CardWidget {
+                border: none;
+                background: transparent;
+            }
+        """)
+        log_layout = QVBoxLayout(log_card)
+        log_layout.setContentsMargins(16, 12, 16, 12)
+        log_layout.setSpacing(6)
+        log_header = QHBoxLayout()
+        log_header.addWidget(BodyLabel("运行日志"))
+        log_header.addStretch(1)
+        clear_btn = TransparentToolButton(FluentIcon.DELETE, log_card)
+        clear_btn.clicked.connect(lambda: self.drm_log.clear())
+        log_header.addWidget(clear_btn)
+        log_layout.addLayout(log_header)
+        self.drm_log = TextEdit(log_card)
+        self.drm_log.setReadOnly(True)
+        self.drm_log.setFixedHeight(150)
+        if isDarkTheme():
+            self.drm_log.setStyleSheet(
+                "TextEdit { background: rgba(0,0,0,0.12); border-radius: 6px; "
+                "font-size: 12px; padding: 8px; }"
+            )
+        else:
+            self.drm_log.setStyleSheet(
+                "TextEdit { background: rgba(0,0,0,0.05); border-radius: 6px; "
+                "font-size: 12px; padding: 8px; }"
+            )
+        log_layout.addWidget(self.drm_log)
+        layout.addWidget(log_card)
+
+        layout.addStretch(1)
+        self.stacked_widget.addWidget(page)
+
+    def _init_gl_page(self):
+        """初始化 GL 模式页面"""
+        page = QWidget()
+        page.setObjectName("glPage")
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 16, 0, 0)
+        layout.setSpacing(16)
+
+        # 授权获取卡片（与GBE页面共享组件）
+        auth_card = GroupHeaderCardWidget(page)
+        auth_card.setTitle("步骤 1: 获取授权文件")
+        auth_card.setBorderRadius(8)
+        auth_card.setStyleSheet("""
+            GroupHeaderCardWidget {
+                border: none;
+                background: transparent;
+            }
+        """)
+
+        # 使用 GL 页面独立的输入框
+        file_row = QWidget()
+        file_row_layout = QHBoxLayout(file_row)
+        file_row_layout.setContentsMargins(0, 0, 0, 0)
+        self.gl_cw_path_edit = LineEdit()
+        self.gl_cw_path_edit.setPlaceholderText(tr("drm_cw_placeholder"))
+        self.gl_cw_path_edit.setReadOnly(True)
+        browse_btn = PushButton(tr("drm_browse"))
+        browse_btn.setFixedWidth(70)
+        browse_btn.clicked.connect(self._browse_cw_gl)
+        decrypt_btn = PrimaryPushButton(tr("drm_decrypt"))
+        decrypt_btn.setFixedWidth(70)
+        decrypt_btn.clicked.connect(self._decrypt_cw_gl)
+        file_row_layout.addWidget(self.gl_cw_path_edit)
+        file_row_layout.addWidget(browse_btn)
+        file_row_layout.addWidget(decrypt_btn)
+        auth_card.addGroup(FluentIcon.DOCUMENT, tr("drm_cw_file"), tr("drm_cw_file_hint"), file_row)
+
+        # 授权码下载
+        code_row = QWidget()
+        code_row_layout = QHBoxLayout(code_row)
+        code_row_layout.setContentsMargins(0, 0, 0, 0)
+        self.gl_auth_code_edit = LineEdit()
+        self.gl_auth_code_edit.setPlaceholderText(tr("drm_auth_code_placeholder"))
+        dl_btn = PrimaryPushButton(tr("drm_download_decrypt"))
+        dl_btn.setFixedWidth(100)
+        dl_btn.clicked.connect(self._download_by_code_gl)
+        code_row_layout.addWidget(self.gl_auth_code_edit)
+        code_row_layout.addWidget(dl_btn)
+        auth_card.addGroup(FluentIcon.CLOUD_DOWNLOAD, tr("drm_auth_code"), tr("drm_auth_code_hint"), code_row)
+
+        # 授权网站链接
+        links_row = QWidget()
+        links_layout = QHBoxLayout(links_row)
+        links_layout.setContentsMargins(0, 0, 0, 0)
+        links_layout.addWidget(HyperlinkButton("https://drm.steam.run", "stool 授权网站"))
+        links_layout.addWidget(HyperlinkButton("https://steam.sakuranoyuki.de5.net", "四星授权网站"))
+        links_layout.addStretch(1)
+        auth_card.addGroup(FluentIcon.LINK, tr("drm_online_auth"), tr("drm_online_auth_hint"), links_row)
+
+        layout.addWidget(auth_card)
+
+        # 授权信息展示卡片（GL页面独立）
+        self.gl_info_card = GroupHeaderCardWidget(page)
+        self.gl_info_card.setTitle(tr("drm_info_title"))
+        self.gl_info_card.setBorderRadius(8)
+        self.gl_info_card.setStyleSheet("""
+            GroupHeaderCardWidget {
+                border: none;
+                background: transparent;
+            }
+        """)
+        self.gl_info_card.hide()
+
+        self.gl_info_appid = BodyLabel("-")
+        self.gl_info_steamid = BodyLabel("-")
+        self.gl_info_start = BodyLabel("-")
+        self.gl_info_end = BodyLabel("-")
+        self.gl_info_card.addGroup(FluentIcon.TAG, "AppID", "", self.gl_info_appid)
+        self.gl_info_card.addGroup(FluentIcon.PEOPLE, "SteamID", "", self.gl_info_steamid)
+        self.gl_info_card.addGroup(FluentIcon.CALENDAR, tr("drm_valid_from"), "", self.gl_info_start)
+        self.gl_info_card.addGroup(FluentIcon.CALENDAR, tr("drm_valid_to"), "", self.gl_info_end)
+        layout.addWidget(self.gl_info_card)
+
+        # GL 模式配置卡片
+        gl_config_card = GroupHeaderCardWidget(page)
+        gl_config_card.setTitle("步骤 2: GL模式配置")
+        gl_config_card.setBorderRadius(8)
+        gl_config_card.setStyleSheet("""
+            GroupHeaderCardWidget {
+                border: none;
+                background: transparent;
+            }
+        """)
+
+        desc_label = BodyLabel("GL模式将授权文件写入SteamTools目录，无需选择游戏exe。")
+        gl_config_card.addGroup(FluentIcon.INFO, "说明", "", desc_label)
+
+        layout.addWidget(gl_config_card)
+
+        # 开始授权按钮
+        self.gl_auth_btn = PrimaryPushButton("开始授权 (GL模式/Steamtools)")
+        self.gl_auth_btn.setIcon(FluentIcon.CERTIFICATE)
+        self.gl_auth_btn.setEnabled(False)
+        self.gl_auth_btn.clicked.connect(self._authorize_gl)
+        layout.addWidget(self.gl_auth_btn)
+
+        # 日志卡片
+        log_card = CardWidget(page)
+        log_card.setStyleSheet("""
+            CardWidget {
+                border: none;
+                background: transparent;
+            }
+        """)
+        log_layout = QVBoxLayout(log_card)
+        log_layout.setContentsMargins(16, 12, 16, 12)
+        log_layout.setSpacing(6)
+        log_header = QHBoxLayout()
+        log_header.addWidget(BodyLabel("运行日志"))
+        log_header.addStretch(1)
+        clear_btn = TransparentToolButton(FluentIcon.DELETE, log_card)
+        clear_btn.clicked.connect(lambda: self.gl_drm_log.clear())
+        log_header.addWidget(clear_btn)
+        log_layout.addLayout(log_header)
+        self.gl_drm_log = TextEdit(log_card)
+        self.gl_drm_log.setReadOnly(True)
+        self.gl_drm_log.setFixedHeight(150)
+        if isDarkTheme():
+            self.gl_drm_log.setStyleSheet(
+                "TextEdit { background: rgba(0,0,0,0.12); border-radius: 6px; "
+                "font-size: 12px; padding: 8px; }"
+            )
+        else:
+            self.gl_drm_log.setStyleSheet(
+                "TextEdit { background: rgba(0,0,0,0.05); border-radius: 6px; "
+                "font-size: 12px; padding: 8px; }"
+            )
+        log_layout.addWidget(self.gl_drm_log)
+        layout.addWidget(log_card)
+
+        layout.addStretch(1)
+        self.stacked_widget.addWidget(page)
+
+    def _init_extractor_page(self):
+        """初始化 CW 提取工具页面"""
+        page = QWidget()
+        page.setObjectName("extractorPage")
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 16, 0, 0)
+        layout.setSpacing(16)
+
+        # CW 提取工具卡片
+        extract_card = GroupHeaderCardWidget(page)
+        extract_card.setTitle("CW 提取工具")
+        extract_card.setBorderRadius(8)
+        extract_card.setStyleSheet("""
+            GroupHeaderCardWidget {
+                border: none;
+                background: transparent;
+            }
+        """)
+
+        # AppID 输入
+        appid_row = QWidget()
+        appid_row_layout = QHBoxLayout(appid_row)
+        appid_row_layout.setContentsMargins(0, 0, 0, 0)
+        self.extract_appid_edit = LineEdit()
+        self.extract_appid_edit.setPlaceholderText("输入游戏 AppID (当前账号必须拥有该游戏)")
+        appid_row_layout.addWidget(self.extract_appid_edit)
+        extract_card.addGroup(FluentIcon.TAG, "游戏 AppID", "", appid_row)
+
+        # 操作按钮
+        btn_row = QWidget()
+        btn_row_layout = QHBoxLayout(btn_row)
+        btn_row_layout.setContentsMargins(0, 0, 0, 0)
+        btn_row_layout.setSpacing(12)
+
+        extract_authcode_btn = PushButton("生成 Tools 授权码")
+        extract_authcode_btn.setIcon(FluentIcon.CERTIFICATE)
+        extract_authcode_btn.setToolTip("此授权码用于 Tools 客户端，非 CW 平台授权码")
+        extract_authcode_btn.clicked.connect(self._extract_auth_code)
+
+        extract_cw_btn = PrimaryPushButton("本地提取 CW")
+        extract_cw_btn.setIcon(FluentIcon.SAVE_AS)
+        extract_cw_btn.clicked.connect(self._extract_cw_file)
+
+        btn_row_layout.addWidget(extract_authcode_btn)
+        btn_row_layout.addWidget(extract_cw_btn)
+        btn_row_layout.addStretch(1)
+
+        extract_card.addGroup(FluentIcon.CERTIFICATE, "操作", "将票证提交到服务器换取 Tools 授权码，或在本地直接加密生成 .cw 文件", btn_row)
+
+        layout.addWidget(extract_card)
+
+        # 工具箱卡片
+        toolbox_card = GroupHeaderCardWidget(page)
+        toolbox_card.setTitle("工具箱")
+        toolbox_card.setBorderRadius(8)
+        toolbox_card.setStyleSheet("""
+            GroupHeaderCardWidget {
+                border: none;
+                background: transparent;
+            }
+        """)
+
+        fix_btn = PushButton("修复 e0 报错")
+        fix_btn.setIcon(FluentIcon.HEART)
+        fix_btn.clicked.connect(self._fix_e0_error)
+        toolbox_card.addGroup(FluentIcon.HEART, "修复工具", "删除Steam缓存文件修复e0错误", fix_btn)
+
+        layout.addWidget(toolbox_card)
+
+        # 日志卡片
+        log_card = CardWidget(page)
+        log_card.setStyleSheet("""
+            CardWidget {
+                border: none;
+                background: transparent;
+            }
+        """)
+        log_layout = QVBoxLayout(log_card)
+        log_layout.setContentsMargins(16, 12, 16, 12)
+        log_layout.setSpacing(6)
+        log_header = QHBoxLayout()
+        log_header.addWidget(BodyLabel("运行日志"))
+        log_header.addStretch(1)
+        clear_btn = TransparentToolButton(FluentIcon.DELETE, log_card)
+        clear_btn.clicked.connect(lambda: self.extractor_log.clear())
+        log_header.addWidget(clear_btn)
+        log_layout.addLayout(log_header)
+        self.extractor_log = TextEdit(log_card)
+        self.extractor_log.setReadOnly(True)
+        self.extractor_log.setFixedHeight(200)
+        if isDarkTheme():
+            self.extractor_log.setStyleSheet(
+                "TextEdit { background: rgba(0,0,0,0.12); border-radius: 6px; "
+                "font-size: 12px; padding: 8px; }"
+            )
+        else:
+            self.extractor_log.setStyleSheet(
+                "TextEdit { background: rgba(0,0,0,0.05); border-radius: 6px; "
+                "font-size: 12px; padding: 8px; }"
+            )
+        log_layout.addWidget(self.extractor_log)
+        layout.addWidget(log_card)
+
+        layout.addStretch(1)
+        self.stacked_widget.addWidget(page)
+
+    def _log(self, msg: str, log_widget=None):
+        """输出日志到指定日志组件"""
+        target_log = log_widget or self.drm_log
+        if target_log:
+            if isDarkTheme():
+                target_log.append(f"<span style='color:#fff'>{msg}</span>")
+            else:
+                target_log.append(f"<span style='color:#000'>{msg}</span>")
+            sb = target_log.verticalScrollBar()
+            sb.setValue(sb.maximum())
+
+    def _log_gbe(self, msg: str):
+        """输出到 GBE 页面日志"""
+        self._log(msg, self.drm_log)
+
+    def _log_gl(self, msg: str):
+        """输出到 GL 页面日志"""
+        self._log(msg, self.gl_drm_log)
+
+    def _log_extractor(self, msg: str):
+        """输出到提取工具页面日志"""
+        self._log(msg, self.extractor_log)
+
+    def notify_theme_changed(self):
+        """通知日志显示组件主题已变化"""
+        # 更新日志显示组件的样式
+        if hasattr(self, 'drm_log') and self.drm_log:
+            if isDarkTheme():
+                self.drm_log.setStyleSheet(
+                    "TextEdit { background: rgba(0,0,0,0.12); border-radius: 6px; "
+                    "font-size: 12px; padding: 8px; }"
+                )
+            else:
+                self.drm_log.setStyleSheet(
+                    "TextEdit { background: rgba(0,0,0,0.05); border-radius: 6px; "
+                    "font-size: 12px; padding: 8px; }"
+                )
+
+    def _browse_cw(self):
+        from PyQt6.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getOpenFileName(self, tr("drm_cw_file"), "", "CW Files (*.cw);;All Files (*)")
+        if path:
+            self.cw_path_edit.setText(path)
+
+    def _browse_cw_gl(self):
+        """GL页面浏览CW文件"""
+        from PyQt6.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getOpenFileName(self, tr("drm_cw_file"), "", "CW Files (*.cw);;All Files (*)")
+        if path:
+            self.gl_cw_path_edit.setText(path)
+
+    def _browse_gbe_exe(self):
+        """浏览GBE模式游戏exe"""
+        from PyQt6.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getOpenFileName(self, "选择游戏程序", "", "Executable Files (*.exe);;All Files (*)")
+        if path:
+            self.gbe_exe_edit.setText(path)
+
+    def _decrypt_cw(self):
+        path = self.cw_path_edit.text().strip()
+        if not path:
+            InfoBar.warning(title=tr("tip"), content=tr("drm_tip_select_cw"), parent=self, position=InfoBarPosition.TOP, duration=2000)
+            return
+        try:
+            from backend.drm_backend import DrmBackend
+            drm = DrmBackend()
+            result = drm.decrypt_cw_file(path)
+            self._cw_result = result
+            self._show_cw_info(result)
+            self._log_gbe(f"解密成功！AppID: {result.appid}, SteamID: {result.steam_id}")
+            # 启用授权按钮
+            self.gbe_auth_btn.setEnabled(True)
+        except ImportError:
+            InfoBar.error(title=tr("drm_missing_dep"), content=tr("drm_missing_dep_hint"), parent=self, position=InfoBarPosition.TOP)
+        except Exception as e:
+            self._log_gbe(f"解密失败: {e}")
+            InfoBar.error(title=tr("drm_decrypt_failed"), content=str(e), parent=self, position=InfoBarPosition.TOP)
+
+    def _decrypt_cw_gl(self):
+        """GL页面解密CW文件"""
+        path = self.gl_cw_path_edit.text().strip()
+        if not path:
+            InfoBar.warning(title=tr("tip"), content=tr("drm_tip_select_cw"), parent=self, position=InfoBarPosition.TOP, duration=2000)
+            return
+        try:
+            from backend.drm_backend import DrmBackend
+            drm = DrmBackend()
+            result = drm.decrypt_cw_file(path)
+            self._cw_result = result
+            self._show_cw_info_gl(result)
+            self._log_gl(f"解密成功！AppID: {result.appid}, SteamID: {result.steam_id}")
+            # 启用授权按钮
+            self.gl_auth_btn.setEnabled(True)
+        except ImportError:
+            InfoBar.error(title=tr("drm_missing_dep"), content=tr("drm_missing_dep_hint"), parent=self, position=InfoBarPosition.TOP)
+        except Exception as e:
+            self._log_gl(f"解密失败: {e}")
+            InfoBar.error(title=tr("drm_decrypt_failed"), content=str(e), parent=self, position=InfoBarPosition.TOP)
+
+    def _download_by_code(self):
+        """GBE页面通过授权码下载"""
+        code = self.auth_code_edit.text().strip()
+        if not code:
+            InfoBar.warning(title=tr("tip"), content=tr("drm_tip_enter_code"), parent=self, position=InfoBarPosition.TOP, duration=2000)
+            return
+
+        async def _dl():
+            from backend.drm_backend import DrmBackend
+            drm = DrmBackend()
+            ok, msg, tmp_path = await drm.download_cw_by_auth_code(code, logger=self._log_gbe)
+            if ok and tmp_path:
+                result = drm.decrypt_cw_file(tmp_path)
+                try:
+                    tmp_path.unlink()
+                except:
+                    pass
+                return result
+            raise Exception(msg)
+
+        _replace_worker(getattr(self, '_drm_worker', None))
+        worker = AsyncWorker(_dl())
+        self._drm_worker = worker
+
+        def on_result(result):
+            self._drm_worker = None
+            self._cw_result = result
+            self._show_cw_info(result)
+            self._log_gbe(f"下载解密成功！AppID: {result.appid}")
+            self.gbe_auth_btn.setEnabled(True)
+
+        def on_error(err):
+            self._drm_worker = None
+            self._log_gbe(f"下载失败: {err}")
+            InfoBar.error(title=tr("drm_download_failed"), content=str(err), parent=self, position=InfoBarPosition.TOP)
+
+        worker.result_ready.connect(on_result)
+        worker.error.connect(on_error)
+        worker.finished.connect(worker.deleteLater)
+        worker.start()
+
+    def _download_by_code_gl(self):
+        """GL页面通过授权码下载"""
+        code = self.gl_auth_code_edit.text().strip()
+        if not code:
+            InfoBar.warning(title=tr("tip"), content=tr("drm_tip_enter_code"), parent=self, position=InfoBarPosition.TOP, duration=2000)
+            return
+
+        async def _dl():
+            from backend.drm_backend import DrmBackend
+            drm = DrmBackend()
+            ok, msg, tmp_path = await drm.download_cw_by_auth_code(code, logger=self._log_gl)
+            if ok and tmp_path:
+                result = drm.decrypt_cw_file(tmp_path)
+                try:
+                    tmp_path.unlink()
+                except:
+                    pass
+                return result
+            raise Exception(msg)
+
+        _replace_worker(getattr(self, '_drm_worker', None))
+        worker = AsyncWorker(_dl())
+        self._drm_worker = worker
+
+        def on_result(result):
+            self._drm_worker = None
+            self._cw_result = result
+            self._show_cw_info_gl(result)
+            self._log_gl(f"下载解密成功！AppID: {result.appid}")
+            self.gl_auth_btn.setEnabled(True)
+
+        def on_error(err):
+            self._drm_worker = None
+            self._log_gl(f"下载失败: {err}")
+            InfoBar.error(title=tr("drm_download_failed"), content=str(err), parent=self, position=InfoBarPosition.TOP)
+
+        worker.result_ready.connect(on_result)
+        worker.error.connect(on_error)
+        worker.finished.connect(worker.deleteLater)
+        worker.start()
+
+    def _show_cw_info(self, result):
+        """显示GBE页面的CW信息"""
+        from backend.drm_backend import DrmBackend
+        self.info_appid.setText(str(result.appid))
+        self.info_steamid.setText(str(result.steam_id))
+        self.info_start.setText(DrmBackend.ts_to_str(result.timeout_start))
+        self.info_end.setText(DrmBackend.ts_to_str(result.timeout_end))
+        self.info_card.show()
+
+    def _show_cw_info_gl(self, result):
+        """显示GL页面的CW信息"""
+        from backend.drm_backend import DrmBackend
+        self.gl_info_appid.setText(str(result.appid))
+        self.gl_info_steamid.setText(str(result.steam_id))
+        self.gl_info_start.setText(DrmBackend.ts_to_str(result.timeout_start))
+        self.gl_info_end.setText(DrmBackend.ts_to_str(result.timeout_end))
+        self.gl_info_card.show()
+
+    def _authorize_gl(self):
+        """GL模式授权"""
+        if not self._cw_result:
+            InfoBar.warning(title=tr("tip"), content=tr("drm_tip_decrypt_first"), parent=self, position=InfoBarPosition.TOP, duration=2000)
+            return
+
+        async def _auth():
+            from backend.drm_backend import DrmBackend
+            drm = DrmBackend()
+            ok, msg = await drm.authorize_gl_mode(self._cw_result)
+            return ok, msg
+
+        _replace_worker(getattr(self, '_drm_worker', None))
+        self.gl_auth_btn.setEnabled(False)
+        worker = AsyncWorker(_auth())
+        self._drm_worker = worker
+
+        def on_result(res):
+            self._drm_worker = None
+            self.gl_auth_btn.setEnabled(True)
+            ok, msg = res
+            self._log_gl(msg)
+            if ok:
+                InfoBar.success(title=tr("drm_auth_success"), content=msg, parent=self, position=InfoBarPosition.TOP, duration=3000)
+            else:
+                InfoBar.error(title=tr("drm_auth_failed"), content=msg, parent=self, position=InfoBarPosition.TOP)
+
+        def on_error(err):
+            self._drm_worker = None
+            self.gl_auth_btn.setEnabled(True)
+            self._log_gl(f"授权失败: {err}")
+            InfoBar.error(title=tr("drm_auth_failed"), content=err, parent=self, position=InfoBarPosition.TOP)
+
+        worker.result_ready.connect(on_result)
+        worker.error.connect(on_error)
+        worker.finished.connect(worker.deleteLater)
+        worker.start()
+
+    def _authorize_gbe(self):
+        """GBE模式授权"""
+        if not self._cw_result:
+            InfoBar.warning(title=tr("tip"), content=tr("drm_tip_decrypt_first"), parent=self, position=InfoBarPosition.TOP, duration=2000)
+            return
+
+        game_exe = self.gbe_exe_edit.text().strip()
+        if not game_exe:
+            InfoBar.warning(title=tr("tip"), content="请选择游戏启动程序", parent=self, position=InfoBarPosition.TOP, duration=2000)
+            return
+
+        dlc_ids = self.gbe_dlc_edit.text().strip()
+        use_lua_dlc = self.gbe_lua_check.isChecked()
+
+        async def _auth():
+            from backend.drm_backend import DrmBackend
+            drm = DrmBackend()
+            ok, msg = await drm.authorize_gbe_mode(
+                self._cw_result,
+                game_exe,
+                dlc_ids=dlc_ids,
+                used_lua_dlc=use_lua_dlc
+            )
+            return ok, msg
+
+        _replace_worker(getattr(self, '_drm_worker', None))
+        self.gbe_auth_btn.setEnabled(False)
+        worker = AsyncWorker(_auth())
+        self._drm_worker = worker
+
+        def on_result(res):
+            self._drm_worker = None
+            self.gbe_auth_btn.setEnabled(True)
+            ok, msg = res
+            self._log_gbe(msg)
+            if ok:
+                InfoBar.success(title=tr("drm_auth_success"), content=msg, parent=self, position=InfoBarPosition.TOP, duration=3000)
+            else:
+                InfoBar.error(title=tr("drm_auth_failed"), content=msg, parent=self, position=InfoBarPosition.TOP)
+
+        def on_error(err):
+            self._drm_worker = None
+            self.gbe_auth_btn.setEnabled(True)
+            self._log_gbe(f"授权失败: {err}")
+            InfoBar.error(title=tr("drm_auth_failed"), content=err, parent=self, position=InfoBarPosition.TOP)
+
+        worker.result_ready.connect(on_result)
+        worker.error.connect(on_error)
+        worker.finished.connect(worker.deleteLater)
+        worker.start()
+
+    def _fix_e0_error(self):
+        """修复e0错误"""
+        if not self._cw_result:
+            InfoBar.warning(title=tr("tip"), content=tr("drm_tip_decrypt_first"), parent=self, position=InfoBarPosition.TOP, duration=2000)
+            return
+
+        from backend.drm_backend import DrmBackend
+        drm = DrmBackend()
+        ok, msg = drm.fix_e0_error(
+            str(self._cw_result.appid),
+            str(self._cw_result.steam_id)
+        )
+        
+        if ok:
+            InfoBar.success(title="修复成功", content=msg, parent=self, position=InfoBarPosition.TOP, duration=3000)
+        else:
+            InfoBar.error(title="修复失败", content=msg, parent=self, position=InfoBarPosition.TOP)
+
+    def _extract_auth_code(self):
+        app_id = self.extract_appid_edit.text().strip()
+        if not app_id or not app_id.isdigit():
+            InfoBar.warning(title=tr("tip"), content=tr("drm_tip_valid_appid"), parent=self, position=InfoBarPosition.TOP, duration=2000)
+            return
+
+        def _run():
+            try:
+                from backend.cw_extractor_core import LocalExtractor
+                extractor = LocalExtractor(int(app_id), self._log)
+                return extractor.extract_to_authcode()
+            except ImportError:
+                return {"success": False, "message": "缺少 DRM.cw_extractor_core 模块"}
+            except Exception as e:
+                return {"success": False, "message": str(e)}
+
+        import concurrent.futures
+        self._log(f"开始提取 AppID {app_id} 的授权码...")
+
+        def _do():
+            with concurrent.futures.ThreadPoolExecutor() as ex:
+                return ex.submit(_run).result()
+
+        _replace_worker(getattr(self, '_drm_worker', None))
+        worker = AsyncWorker(_do())  # 包一层 async 壳
+        self._drm_worker = worker
+
+        # 直接用线程跑，不走 asyncio
+        import threading
+        def _thread_run():
+            result = _run()
+            if result.get("success"):
+                auth_code = result.get("auth_code", "")
+                self._log_extractor(f"Tools 授权码: {auth_code}")
+                self._log_extractor(">>> Tools 授权码已生成，请在 Tools 客户端中使用 <<<")
+                try:
+                    from PyQt6.QtWidgets import QApplication
+                    QApplication.clipboard().setText(auth_code)
+                    self._log_extractor(">>> 已自动复制到剪贴板 <<<")
+                except Exception:
+                    pass
+            else:
+                self._log_extractor(f"提取失败: {result.get('message', '未知错误')}")
+
+        t = threading.Thread(target=_thread_run, daemon=True)
+        t.start()
+        self._drm_worker = None  # 线程方式不用 worker
+
+    def _extract_cw_file(self):
+        app_id = self.extract_appid_edit.text().strip()
+        if not app_id or not app_id.isdigit():
+            InfoBar.warning(title=tr("tip"), content=tr("drm_tip_valid_appid"), parent=self, position=InfoBarPosition.TOP, duration=2000)
+            return
+
+        from PyQt6.QtWidgets import QFileDialog
+        output_dir, _ = QFileDialog.getSaveFileName(self, "保存 CW 文件", f"{app_id}.cw", "CW Files (*.cw)")
+        if not output_dir:
+            return
+
+        import threading
+        self._log_extractor(f"开始生成 AppID {app_id} 的 CW 文件...")
+
+        def _thread_run():
+            try:
+                from backend.cw_extractor_core import LocalExtractor, HAVE_PYCRYPTODOME
+                if not HAVE_PYCRYPTODOME:
+                    self._log_extractor("错误: 需要安装 pycryptodome: pip install pycryptodome")
+                    return
+                extractor = LocalExtractor(int(app_id), self._log_extractor)
+                result = extractor.extract_to_cw_file(output_dir)
+                if result.get("success"):
+                    self._log_extractor(f"CW 文件已生成: {result.get('file_path')}")
+                    self._log_extractor(f"包含 {result.get('dlc_count', 0)} 个 DLC")
+                else:
+                    self._log_extractor(f"生成失败: {result.get('message', '未知错误')}")
+            except ImportError:
+                self._log_extractor("错误: 缺少 cw_extractor_core 模块")
+            except Exception as e:
+                self._log_extractor(f"发生错误: {e}")
+
+        threading.Thread(target=_thread_run, daemon=True).start()
+
+
+class SteamAccountPage(ScrollArea):
+    """Steam 账号管理页面"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("steamAccountPage")
+        self.setWidgetResizable(True)
+
+        # 初始化头像网络管理器和缓存
+        self.network_manager = QNetworkAccessManager(self)
+        self._avatar_cache = {}
+
+        # 主容器
+        container = QWidget()
+        container.setObjectName("steamAccountContainer")
+        self.setWidget(container)
+
+        self.mainLayout = QVBoxLayout(container)
+        self.mainLayout.setContentsMargins(30, 30, 30, 30)
+        self.mainLayout.setSpacing(20)
+
+        # 标题栏
+        header_layout = QHBoxLayout()
+        self.title = SubtitleLabel(tr("steam_account_manager"), self)
+
+        # 刷新按钮
+        self.refresh_button = TransparentToolButton(FluentIcon.SYNC, self)
+        self.refresh_button.setFixedSize(32, 32)
+        self.refresh_button.clicked.connect(self.load_accounts)
+        self.refresh_button.setToolTip(tr("refresh_accounts"))
+
+        # 视图切换按钮 - 使用 MENU 和 EMBED 图标代替 GRID/LIST
+        self.view_mode_button = TransparentToolButton(FluentIcon.MENU, self)
+        self.view_mode_button.setFixedSize(32, 32)
+        self.view_mode_button.clicked.connect(self.toggle_view_mode)
+        self.view_mode_button.setToolTip(tr("toggle_view_mode"))
+        
+        header_layout.addWidget(self.title)
+        header_layout.addStretch(1)
+        header_layout.addWidget(self.view_mode_button)
+        header_layout.addWidget(self.refresh_button)
+        self.mainLayout.addLayout(header_layout)
+        
+        # 账号容器 - 使用 QStackedWidget 支持视图切换
+        self.view_stack = QStackedWidget(self)
+        self.current_view_mode = "grid"  # grid 或 list
+        
+        # 网格视图容器
+        self.grid_container = QWidget()
+        self.grid_layout = SafeFlowLayout(self.grid_container)
+        self.grid_layout.setContentsMargins(0, 0, 0, 0)
+        self.grid_layout.setSpacing(15)
+        
+        # 列表视图容器
+        self.list_container = QWidget()
+        self.list_layout = QVBoxLayout(self.list_container)
+        self.list_layout.setContentsMargins(0, 0, 0, 0)
+        self.list_layout.setSpacing(10)
+        self.list_layout.addStretch(1)
+        
+        # 添加到堆叠部件
+        self.view_stack.addWidget(self.grid_container)
+        self.view_stack.addWidget(self.list_container)
+        self.mainLayout.addWidget(self.view_stack)
+        self.mainLayout.addStretch(1)
+        
+        # 账号数据
+        self.accounts = []
+        self.account_notes = {}  # 存储备注
+        self.load_notes()
+        
+        # 设置透明背景
+        self.setStyleSheet("SteamAccountPage { background: transparent; }")
+        container.setStyleSheet("QWidget#steamAccountContainer { background: transparent; }")
+        
+        # 延迟加载账号
+        QTimer.singleShot(100, self.load_accounts)
+    
+    def load_notes(self):
+        """加载账号备注"""
+        self.account_notes = {}
+        try:
+            notes_path = APP_ROOT / 'config' / 'account_notes.json'
+            print(f"[DEBUG] 尝试加载备注文件: {notes_path}")
+            if notes_path.exists():
+                with open(notes_path, 'r', encoding='utf-8') as f:
+                    self.account_notes = json.load(f)
+                print(f"[DEBUG] 已加载备注: {self.account_notes}")
+            else:
+                print(f"[DEBUG] 备注文件不存在: {notes_path}")
+        except Exception as e:
+            print(f"[DEBUG] 加载备注失败: {e}")
+            pass
+    
+    def save_notes(self):
+        """保存账号备注"""
+        try:
+            notes_path = APP_ROOT / 'config' / 'account_notes.json'
+            notes_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(notes_path, 'w', encoding='utf-8') as f:
+                json.dump(self.account_notes, f, ensure_ascii=False, indent=2)
+            print(f"[DEBUG] 备注已保存到: {notes_path}")
+            print(f"[DEBUG] 保存的内容: {self.account_notes}")
+        except Exception as e:
+            print(f"[DEBUG] 保存备注失败: {e}")
+    
+    def toggle_view_mode(self):
+        """切换视图模式"""
+        if self.current_view_mode == "grid":
+            self.current_view_mode = "list"
+            self.view_mode_button.setIcon(FluentIcon.EMBED)
+            self.view_stack.setCurrentWidget(self.list_container)
+        else:
+            self.current_view_mode = "grid"
+            self.view_mode_button.setIcon(FluentIcon.MENU)
+            self.view_stack.setCurrentWidget(self.grid_container)
+        self.refresh_account_display()
+    
+    def load_accounts(self):
+        """加载账号列表"""
+        async def _load():
+            async with CaiBackend() as backend:
+                await backend.initialize()
+                accounts = backend.get_steam_accounts()
+                return accounts
+        
+        def on_loaded(accounts):
+            self.accounts = accounts
+            self.refresh_account_display()
+        
+        def on_error(error):
+            InfoBar.error(
+                title=tr("load_accounts_failed"),
+                content=str(error),
+                parent=self,
+                position=InfoBarPosition.TOP
+            )
+        
+        _replace_worker(getattr(self, 'load_worker', None))
+        self.load_worker = AsyncWorker(_load())
+        self.load_worker.result_ready.connect(on_loaded)
+        self.load_worker.error.connect(on_error)
+        self.load_worker.finished.connect(self.load_worker.deleteLater)
+        self.load_worker.start()
+    
+    def refresh_account_display(self):
+        """刷新账号显示"""
+        # 清除网格布局内容
+        while self.grid_layout.count():
+            item = self.grid_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        
+        # 清除列表布局内容（保留最后的 stretch）
+        while self.list_layout.count() > 1:
+            item = self.list_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        
+        # 添加账号卡片到两个布局
+        for account_info in self.accounts:
+            grid_card = self.create_account_card(account_info)
+            list_card = self.create_account_card(account_info)
+            self.grid_layout.addWidget(grid_card)
+            self.list_layout.insertWidget(self.list_layout.count() - 1, list_card)
+    
+    def create_account_card(self, account_info):
+        """创建账号卡片"""
+        account = account_info['account']
+        persona_name = account_info['persona_name']
+        steamid = account_info['steamid']
+        most_recent = account_info['most_recent']
+        remember_pwd = account_info.get('remember_password', False)
+
+        # 获取备注
+        note = self.account_notes.get(account, "")
+        print(f"[DEBUG] 创建卡片，账号: {account}, 备注: {note}")
+
+        # 根据视图模式设置不同尺寸
+        if self.current_view_mode == "grid":
+            card = CardWidget(self)
+            card.setFixedSize(320, 140)
+
+            layout = QHBoxLayout(card)
+            layout.setContentsMargins(12, 10, 12, 10)
+            layout.setSpacing(10)
+
+            # 1. 头像区域
+            avatar = AvatarWidget(self)
+            avatar.setFixedSize(50, 50)
+            self.load_avatar(avatar, steamid)
+            layout.addWidget(avatar)
+
+            # 2. 信息区域
+            info_layout = QVBoxLayout()
+            info_layout.setSpacing(2)
+
+            # 昵称
+            name_label = BodyLabel(persona_name or account, self)
+            name_label.setStyleSheet("font-weight: bold; font-size: 13px;")
+
+            # 账号名
+            account_label = CaptionLabel(f"账号: {account}", self)
+            account_label.setTextColor("#606060", "#a0a0a0")
+
+            # 备注
+            note_label = CaptionLabel(f"备注: {note}" if note else tr("no_note"), self)
+            note_label.setTextColor("#808080", "#808080")
+
+            # 密码状态
+            pwd_status = CaptionLabel("✅ 可自动上号" if remember_pwd else "❌ 未保存密码", self)
+            pwd_status.setStyleSheet("color: #10b981; font-size: 11px;" if remember_pwd else "color: #ef4444; font-size: 11px;")
+
+            info_layout.addWidget(name_label)
+            info_layout.addWidget(account_label)
+            info_layout.addWidget(note_label)
+            info_layout.addWidget(pwd_status)
+            layout.addLayout(info_layout, 1)
+
+            # 3. 操作按钮区域 - 垂直布局
+            btn_layout = QVBoxLayout()
+            btn_layout.setSpacing(4)
+            btn_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+            if most_recent:
+                current_label = CaptionLabel("当前登录", self)
+                current_label.setStyleSheet("color: #0078d4; font-size: 10px;")
+                current_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                btn_layout.addWidget(current_label)
+
+            # 登录按钮
+            login_btn = PrimaryPushButton("一键上号" if remember_pwd else "手动上号", self)
+            login_btn.setFixedSize(85, 28)
+            login_btn.setStyleSheet("font-size: 11px;")
+            login_btn.clicked.connect(lambda checked=False, acc=account: self.switch_account(acc, offline=False))
+            btn_layout.addWidget(login_btn)
+
+            # 更多按钮
+            more_btn = TransparentToolButton(FluentIcon.MORE, self)
+            more_btn.setFixedSize(28, 28)
+            more_btn.clicked.connect(lambda checked=False, acc=account, lbl=note_label, btn=more_btn: self.show_account_menu(acc, lbl, btn))
+            btn_layout.addWidget(more_btn, alignment=Qt.AlignmentFlag.AlignCenter)
+
+            layout.addLayout(btn_layout)
+
+        else:
+            # 列表视图
+            card = CardWidget(self)
+            card.setFixedHeight(120)
+
+            layout = QHBoxLayout(card)
+            layout.setContentsMargins(10, 10, 10, 10)
+            layout.setSpacing(12)
+
+            # 1. 头像区域 - 列表视图用更小的头像
+            avatar = AvatarWidget(self)
+            avatar.setFixedSize(40, 40)
+            self.load_avatar(avatar, steamid)
+            layout.addWidget(avatar)
+
+            # 2. 信息区域 - 列表视图简化显示
+            info_layout = QVBoxLayout()
+            info_layout.setSpacing(2)
+
+            # 昵称和账号在同一行
+            name_layout = QHBoxLayout()
+            name_label = BodyLabel(persona_name or account, self)
+            name_label.setStyleSheet("font-weight: bold; font-size: 13px;")
+            name_layout.addWidget(name_label)
+
+            account_label = CaptionLabel(f"({account})", self)
+            account_label.setTextColor("#606060", "#a0a0a0")
+            name_layout.addWidget(account_label)
+            name_layout.addStretch(1)
+
+            # 第二行：备注和密码状态
+            status_layout = QHBoxLayout()
+            note_label = CaptionLabel(note if note else tr("no_note"), self)
+            note_label.setTextColor("#808080", "#808080")
+            status_layout.addWidget(note_label)
+
+            pwd_status = CaptionLabel("✅ 可自动上号" if remember_pwd else "❌ 未保存密码", self)
+            pwd_status.setStyleSheet("color: #10b981; font-size: 11px;" if remember_pwd else "color: #ef4444; font-size: 11px;")
+            status_layout.addWidget(pwd_status)
+            status_layout.addStretch(1)
+
+            info_layout.addLayout(name_layout)
+            info_layout.addLayout(status_layout)
+            layout.addLayout(info_layout, 1)
+
+            # 3. 操作按钮区域 - 列表视图水平排列
+            btn_layout = QHBoxLayout()
+            btn_layout.setSpacing(6)
+
+            if most_recent:
+                current_label = CaptionLabel("当前登录", self)
+                current_label.setStyleSheet("color: #0078d4; font-size: 10px;")
+                btn_layout.addWidget(current_label)
+
+            # 登录按钮
+            login_btn = PrimaryPushButton("一键上号" if remember_pwd else "手动上号", self)
+            login_btn.setFixedSize(80, 28)
+            login_btn.setStyleSheet("font-size: 11px;")
+            login_btn.clicked.connect(lambda checked=False, acc=account: self.switch_account(acc, offline=False))
+            btn_layout.addWidget(login_btn)
+
+            # 更多按钮
+            more_btn = TransparentToolButton(FluentIcon.MORE, self)
+            more_btn.setFixedSize(28, 28)
+            more_btn.clicked.connect(lambda checked=False, acc=account, lbl=note_label, btn=more_btn: self.show_account_menu(acc, lbl, btn))
+            btn_layout.addWidget(more_btn)
+
+            layout.addLayout(btn_layout)
+
+        # 右键菜单 (闭包传参修复)
+        card.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        card.customContextMenuRequested.connect(
+            lambda pos, acc=account, lbl=note_label, c=card: self.show_account_context_menu(acc, lbl, c.mapToGlobal(pos))
+        )
+
+        return card
+    
+    def load_avatar(self, avatar_widget, steamid):
+        """异步获取 Steam 真实高清头像"""
+        # 如果缓存里有，直接使用
+        if steamid in self._avatar_cache:
+            from PyQt6.QtGui import QImage
+            avatar_widget.setImage(QImage.fromData(self._avatar_cache[steamid]))
+            return
+
+        # 1. 访问 Steam XML API 获取头像链接
+        url = f"https://steamcommunity.com/profiles/{steamid}?xml=1"
+        request = QNetworkRequest(QUrl(url))
+        reply = self.network_manager.get(request)
+        reply.finished.connect(lambda: self._on_avatar_xml_loaded(reply, avatar_widget, steamid))
+
+    def _on_avatar_xml_loaded(self, reply, avatar_widget, steamid):
+        """解析 XML 拿到图片 URL 后下载图片"""
+        # 检查 widget 是否已被删除
+        if sip.isdeleted(avatar_widget):
+            reply.deleteLater()
+            return
+        if reply.error() == QNetworkReply.NetworkError.NoError:
+            xml_data = reply.readAll().data().decode('utf-8', errors='ignore')
+            import re
+            # 提取 avatarFull 高清头像
+            match = re.search(r'<avatarFull><!\[CDATA\[(.*?)\]\]></avatarFull>', xml_data)
+            if match:
+                avatar_url = match.group(1)
+                # 2. 发起图片下载请求
+                img_req = QNetworkRequest(QUrl(avatar_url))
+                img_reply = self.network_manager.get(img_req)
+                img_reply.finished.connect(lambda: self._on_avatar_img_loaded(img_reply, avatar_widget, steamid))
+        reply.deleteLater()
+
+    def _on_avatar_img_loaded(self, reply, avatar_widget, steamid):
+        """图片下载完成，渲染到 UI 并缓存"""
+        # 检查 widget 是否已被删除
+        if sip.isdeleted(avatar_widget):
+            reply.deleteLater()
+            return
+        if reply.error() == QNetworkReply.NetworkError.NoError:
+            data = reply.readAll().data()
+            from PyQt6.QtGui import QImage
+            image = QImage.fromData(data)
+            if not image.isNull():
+                self._avatar_cache[steamid] = data
+                avatar_widget.setImage(image)
+        reply.deleteLater()
+    
+    def edit_note(self, account, note_label):
+        """编辑备注"""
+        from qfluentwidgets import MessageBoxBase, LineEdit, BodyLabel
+        
+        class NoteDialog(MessageBoxBase):
+            def __init__(self, current_note, parent=None):
+                super().__init__(parent)
+                self.titleLabel = TitleLabel(tr("edit_note_title"), self)
+                self.bodyLabel = BodyLabel(tr("edit_note_message"), self)
+                
+                self.noteInput = LineEdit(self)
+                self.noteInput.setText(current_note)
+                self.noteInput.setPlaceholderText(tr("note_placeholder"))
+                self.noteInput.setMinimumWidth(300)
+                
+                self.viewLayout.addWidget(self.titleLabel)
+                self.viewLayout.addWidget(self.bodyLabel)
+                self.viewLayout.addWidget(self.noteInput)
+                
+                self.yesButton.setText(tr("save"))
+                self.cancelButton.setText(tr("cancel"))
+                self.widget.setMinimumWidth(350)
+            
+            def get_note(self):
+                return self.noteInput.text().strip()
+        
+        current_note = self.account_notes.get(account, "")
+        dialog = NoteDialog(current_note, self)
+        
+        if dialog.exec():
+            new_note = dialog.get_note()
+            self.account_notes[account] = new_note
+            self.save_notes()
+            note_label.setText(new_note if new_note else tr("no_note"))
+            InfoBar.success(
+                title=tr("note_saved"),
+                content=tr("note_saved_message"),
+                parent=self,
+                position=InfoBarPosition.TOP
+            )
+    
+    def switch_account(self, account, offline=False):
+        """切换到指定账号"""
+        async def _switch():
+            async with CaiBackend() as backend:
+                await backend.initialize()
+                success = backend.switch_steam_account(account, offline=offline)
+                return success
+        
+        def on_complete(success):
+            if success:
+                mode_text = tr("offline_mode") if offline else tr("online_mode")
+                InfoBar.success(
+                    title=tr("switch_account_success"),
+                    content=f"{tr('switch_account_success_message')} ({mode_text})",
+                    parent=self,
+                    position=InfoBarPosition.TOP
+                )
+                # 刷新列表以更新当前登录状态
+                QTimer.singleShot(2000, self.load_accounts)
+            else:
+                InfoBar.error(
+                    title=tr("switch_account_failed"),
+                    content=tr("switch_account_failed_message"),
+                    parent=self,
+                    position=InfoBarPosition.TOP
+                )
+        
+        def on_error(error):
+            InfoBar.error(
+                title=tr("switch_account_failed"),
+                content=str(error),
+                parent=self,
+                position=InfoBarPosition.TOP
+            )
+        
+        _replace_worker(getattr(self, 'switch_worker', None))
+        self.switch_worker = AsyncWorker(_switch())
+        self.switch_worker.result_ready.connect(on_complete)
+        self.switch_worker.error.connect(on_error)
+        self.switch_worker.finished.connect(self.switch_worker.deleteLater)
+        self.switch_worker.start()
+        
+        mode_text = tr("offline_mode") if offline else tr("online_mode")
+        InfoBar.info(
+            title=tr("switching_account"),
+            content=f"{tr('switching_account_message')} ({mode_text})",
+            parent=self,
+            position=InfoBarPosition.TOP
+        )
+    
+    def delete_account(self, account):
+        """删除账号"""
+        # 确认对话框
+        dialog = MessageBox(
+            tr("confirm_delete_account"),
+            tr("delete_account_message").format(account),
+            self
+        )
+        
+        if dialog.exec():
+            async def _delete():
+                async with CaiBackend() as backend:
+                    await backend.initialize()
+                    # 从 loginusers.vdf 删除
+                    success = backend.delete_steam_account(account)
+                    return success
+            
+            def on_complete(success):
+                if success:
+                    # 同时删除备注
+                    if account in self.account_notes:
+                        del self.account_notes[account]
+                        self.save_notes()
+                    # 刷新列表
+                    self.load_accounts()
+                    InfoBar.success(
+                        title=tr("delete_account_success"),
+                        content=tr("delete_account_success_message"),
+                        parent=self,
+                        position=InfoBarPosition.TOP
+                    )
+                else:
+                    InfoBar.error(
+                        title=tr("delete_account_failed"),
+                        content=tr("delete_account_failed_message"),
+                        parent=self,
+                        position=InfoBarPosition.TOP
+                    )
+            
+            def on_error(error):
+                InfoBar.error(
+                    title=tr("delete_account_failed"),
+                    content=str(error),
+                    parent=self,
+                    position=InfoBarPosition.TOP
+                )
+            
+            _replace_worker(getattr(self, 'delete_worker', None))
+            self.delete_worker = AsyncWorker(_delete())
+            self.delete_worker.result_ready.connect(on_complete)
+            self.delete_worker.error.connect(on_error)
+            self.delete_worker.finished.connect(self.delete_worker.deleteLater)
+            self.delete_worker.start()
+    
+    def show_account_menu(self, account, note_label, parent_widget):
+        """显示账号操作菜单"""
+        menu = RoundMenu()
+        
+        # 离线启动
+        offline_action = Action(FluentIcon.CLOUD, tr("switch_offline"))
+        offline_action.triggered.connect(lambda: self.switch_account(account, offline=True))
+        menu.addAction(offline_action)
+        
+        menu.addSeparator()
+        
+        # 编辑备注
+        note_action = Action(FluentIcon.EDIT, tr("edit_note"))
+        note_action.triggered.connect(lambda: self.edit_note(account, note_label))
+        menu.addAction(note_action)
+        
+        menu.addSeparator()
+        
+        # 删除账号
+        delete_action = Action(FluentIcon.DELETE, tr("delete_account"))
+        delete_action.triggered.connect(lambda: self.delete_account(account))
+        menu.addAction(delete_action)
+        
+        # 显示菜单
+        menu.exec(parent_widget.mapToGlobal(QPoint(0, parent_widget.height())))
+    
+    def show_account_context_menu(self, account, note_label, global_pos):
+        """显示账号右键菜单"""
+        menu = RoundMenu()
+        
+        # 在线启动
+        online_action = Action(FluentIcon.POWER_BUTTON, tr("switch_to_this_account"))
+        online_action.triggered.connect(lambda: self.switch_account(account, offline=False))
+        menu.addAction(online_action)
+        
+        # 离线启动
+        offline_action = Action(FluentIcon.CLOUD, tr("switch_offline"))
+        offline_action.triggered.connect(lambda: self.switch_account(account, offline=True))
+        menu.addAction(offline_action)
+        
+        menu.addSeparator()
+        
+        # 编辑备注
+        note_action = Action(FluentIcon.EDIT, tr("edit_note"))
+        note_action.triggered.connect(lambda: self.edit_note(account, note_label))
+        menu.addAction(note_action)
+        
+        menu.addSeparator()
+        
+        # 删除账号
+        delete_action = Action(FluentIcon.DELETE, tr("delete_account"))
+        delete_action.triggered.connect(lambda: self.delete_account(account))
+        menu.addAction(delete_action)
+        
+        # 显示菜单
+        menu.exec(global_pos)
+
 
 class SettingsPage(ScrollArea):
     """设置页面"""
-    
+
+    custom_repos_changed = pyqtSignal()  # 自定义仓库列表变化信号
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("settingsPage")
@@ -5856,7 +8071,10 @@ class SettingsPage(ScrollArea):
         self.hide_search_check = None
         self.hide_launcher_check = None
         self.hide_trainer_check = None
+        self.hide_drm_check = None
         self.sidebar_group = None
+        self.smooth_scroll_check = None
+        self.custom_repos_card = None
 
         self._config_loaded = False
         self.worker = None
@@ -5880,28 +8098,14 @@ class SettingsPage(ScrollArea):
             self._pending_logs.append((level, msg))
             return
         
-        # 根据主题模式设置颜色映射
-        if isDarkTheme():
-            color_map = {
-                "DEBUG": "#888888",
-                "INFO": "#cccccc",
-                "WARNING": "#f59e0b",
-                "ERROR": "#ef4444",
-                "CRITICAL": "#dc2626",
-            }
-        else:
-            color_map = {
-                "DEBUG": "#666666",
-                "INFO": "#333333",
-                "WARNING": "#d97706",
-                "ERROR": "#dc2626",
-                "CRITICAL": "#991b1b",
-            }
-        
-        color = color_map.get(level, "#cccccc" if isDarkTheme() else "#333333")
-        self.log_view.append(f"<span style='color:{color}'>{msg}</span>")
-        sb = self.log_view.verticalScrollBar()
-        sb.setValue(sb.maximum())
+        try:
+            color = "#cccccc" if isDarkTheme() else "#333333"
+            self.log_view.append(f"<span style='color:{color}'>{msg}</span>")
+            sb = self.log_view.verticalScrollBar()
+            if sb:
+                sb.setValue(sb.maximum())
+        except RuntimeError:
+            pass
 
     def _clear_log(self):
         """清空日志视图"""
@@ -5945,6 +8149,12 @@ class SettingsPage(ScrollArea):
         app_config_card = GroupHeaderCardWidget(self)
         app_config_card.setTitle(tr("application_config"))
         app_config_card.setBorderRadius(8)
+        app_config_card.setStyleSheet("""
+            GroupHeaderCardWidget {
+                border: none;
+                background: transparent;
+            }
+        """)
 
         self.debug_check = SwitchButton()
         self.debug_check.setChecked(False)
@@ -5955,7 +8165,7 @@ class SettingsPage(ScrollArea):
         app_config_card.addGroup(FluentIcon.SAVE, tr("save_log_files"), tr("save_log_files_hint"), self.logging_check)
 
         self.unlocker_combo = ComboBox()
-        self.unlocker_combo.addItems([tr("auto_detect"), tr("force_steamtools"), tr("force_greenluma")])
+        self.unlocker_combo.addItems([tr("auto_detect"), tr("force_steamtools"), tr("force_greenluma"), tr("force_opensteamtools")])
         self.unlocker_combo.setCurrentIndex(0)
         self.unlocker_combo.setFixedWidth(180)
         app_config_card.addGroup(FluentIcon.SETTING, tr("unlocker_mode"), tr("force_unlocker_hint"), self.unlocker_combo)
@@ -5981,6 +8191,12 @@ class SettingsPage(ScrollArea):
         self.show_progress_check.setChecked(True)
         # 注意：信号连接移到 _setup_auto_save_listeners，避免配置加载前触发保存
         app_config_card.addGroup(FluentIcon.SYNC, tr("show_progress_bar"), tr("show_progress_bar_hint"), self.show_progress_check)
+
+        # 平滑滚动选项（信号在 _setup_auto_save_listeners 中连接）
+        self.smooth_scroll_check = SwitchButton()
+        self.smooth_scroll_check.setChecked(True)
+        # 注意：信号连接移到 _setup_auto_save_listeners，避免配置加载前触发保存
+        app_config_card.addGroup(FluentIcon.SCROLL, tr("smooth_scroll"), tr("smooth_scroll_hint"), self.smooth_scroll_check)
 
         # 创建 DLC 超时时间设置（左边输入框，右边滑块）
         self.dlc_timeout_edit = LineEdit()
@@ -6041,8 +8257,14 @@ class SettingsPage(ScrollArea):
         app_config_card.addGroup(FluentIcon.SPEED_HIGH, tr("download_timeout"), tr("download_timeout_hint"), timeout_widget)
 
         layout.addWidget(app_config_card)
+
+        # 添加自定义仓库卡片
+        self.custom_repos_card = CustomReposCard(self)
+        self.custom_repos_card.repos_changed.connect(self._on_custom_repos_changed)
+        layout.addWidget(self.custom_repos_card)
+
         QTimer.singleShot(0, self._build_phase3)
-        
+
         # 设置同步逻辑
         self._setup_sync_connections()
 
@@ -6106,6 +8328,12 @@ class SettingsPage(ScrollArea):
         appearance_card = GroupHeaderCardWidget(self)
         appearance_card.setTitle(tr("appearance"))
         appearance_card.setBorderRadius(8)
+        appearance_card.setStyleSheet("""
+            GroupHeaderCardWidget {
+                border: none;
+                background: transparent;
+            }
+        """)
 
         self.theme_combo = ComboBox()
         self.theme_combo.addItems([tr("light_theme"), tr("dark_theme"), tr("follow_system")])
@@ -6127,7 +8355,7 @@ class SettingsPage(ScrollArea):
         appearance_card.addGroup(FluentIcon.HOME, tr("default_page"), tr("default_page_hint"), self.default_page_combo)
 
         self.lang_combo = ComboBox()
-        self.lang_combo.addItems(["系统默认", "简体中文", "English", "Français", "Русский", "Deutsch", "日本語", "繁體中文"])
+        self.lang_combo.addItems(["系统默认", "简体中文", "繁體中文", "English"])
         self.lang_combo.setCurrentIndex(0)
         self.lang_combo.currentIndexChanged.connect(self.on_language_changed)
         self.lang_combo.setFixedWidth(150)
@@ -6147,6 +8375,12 @@ class SettingsPage(ScrollArea):
         layout = self._build_layout
 
         log_card = CardWidget(self)
+        log_card.setStyleSheet("""
+            CardWidget {
+                border: none;
+                background: transparent;
+            }
+        """)
         log_card_layout = QVBoxLayout(log_card)
         log_card_layout.setContentsMargins(20, 16, 20, 16)
         log_card_layout.setSpacing(8)
@@ -6221,6 +8455,8 @@ class SettingsPage(ScrollArea):
         else:
             # 配置已加载过（可能是预构建时），但控件刚创建，需要重新加载配置到控件
             self.load_config()
+            # 重新连接信号监听器（控件是新创建的）
+            self._setup_auto_save_listeners()
     
     def _setup_auto_save_listeners(self):
         """设置自动保存监听器"""
@@ -6239,6 +8475,8 @@ class SettingsPage(ScrollArea):
             self.logging_check.checkedChanged.connect(self._on_setting_changed)
         if self.show_progress_check:
             self.show_progress_check.checkedChanged.connect(self._on_setting_changed)
+        if self.smooth_scroll_check:
+            self.smooth_scroll_check.checkedChanged.connect(self._on_smooth_scroll_changed)
         
         # 下拉框
         if self.unlocker_combo:
@@ -6249,7 +8487,7 @@ class SettingsPage(ScrollArea):
         
         if self.st_fixed_manifest_combo:
             self.st_fixed_manifest_combo.currentIndexChanged.connect(self._on_setting_changed)
-        
+
         # DLC 超时时间
         if self.dlc_timeout_spinbox:
             self.dlc_timeout_spinbox.valueChanged.connect(self._on_setting_changed)
@@ -6279,7 +8517,24 @@ class SettingsPage(ScrollArea):
         
         # 延迟500ms保存，避免频繁保存
         self._save_timer.start(500)
-    
+
+    def _on_smooth_scroll_changed(self):
+        """平滑滚动设置改变"""
+        # 获取当前设置值
+        smooth_scroll = self.smooth_scroll_check.isChecked()
+        # 保存设置
+        self.save_settings()
+        # 通知主窗口更新所有页面的平滑滚动状态（直接传递设置值，避免异步读取）
+        main_window = self.window()
+        if hasattr(main_window, 'update_smooth_scroll_for_all_pages'):
+            main_window.update_smooth_scroll_for_all_pages(smooth_scroll)
+
+    def _on_custom_repos_changed(self):
+        """自定义仓库列表变化时保存并通知"""
+        self.save_settings()
+        # 发射信号通知主窗口更新搜索页面的清单源下拉框
+        self.custom_repos_changed.emit()
+
     def on_theme_mode_changed(self, index):
         """主题模式切换"""
         theme_map = {0: "light", 1: "dark", 2: "auto"}
@@ -6372,10 +8627,13 @@ class SettingsPage(ScrollArea):
     
     def on_language_changed(self, index):
         """语言切换"""
-        lang_map = {0: "system", 1: "zh_CN", 2: "en_US", 3: "fr_FR", 4: "ru_RU", 5: "de_DE", 6: "ja_JP", 7: "zh_TW"}
-        lang_name_map = {0: "系统默认", 1: "简体中文", 2: "English", 3: "Français", 4: "Русский", 5: "Deutsch", 6: "日本語", 7: "繁體中文"}
+        lang_map = {0: "system", 1: "zh_CN", 2: "zh_TW", 3: "en_US"}
+        lang_name_map = {0: "系统默认", 1: "简体中文", 2: "繁體中文", 3: "English"}
         selected_lang = lang_map.get(index, "system")
         lang_name = lang_name_map.get(index, "系统默认")
+        
+        # 立即应用语言设置，使对话框显示新语言
+        set_language(selected_lang)
         
         # 显示重启提示
         dialog = MessageBox(
@@ -6394,9 +8652,10 @@ class SettingsPage(ScrollArea):
             import os
             os.execl(sys.executable, sys.executable, *sys.argv)
         else:
-            # 用户取消，恢复原来的选择
+            # 用户取消，恢复原来的语言设置
             current_lang = self.load_language_setting()
-            reverse_map = {"system": 0, "zh_CN": 1, "en_US": 2, "fr_FR": 3, "ru_RU": 4, "de_DE": 5, "ja_JP": 6, "zh_TW": 7}
+            set_language(current_lang)
+            reverse_map = {"system": 0, "zh_CN": 1, "zh_TW": 2, "en_US": 3}
             self.lang_combo.setCurrentIndex(reverse_map.get(current_lang, 0))
     
     def on_default_page_changed(self, index):
@@ -6514,53 +8773,6 @@ class SettingsPage(ScrollArea):
         worker.error.connect(on_error)
         worker.finished.connect(worker.deleteLater)
         worker.start()
-
-    def _get_mirror_download_url(self, original_url: str, latest_version: str = "") -> str:
-        """
-        获取镜像化的下载链接，中国大陆用户自动跳转镜像
-        优化：直接跳转到具体的下载链接而不是发布页面
-        """
-        # 检查当前是否在中国大陆
-        try:
-            import os
-            is_cn = os.environ.get('IS_CN', '').lower() == 'yes'
-            
-            # 如果有版本号，直接生成下载链接
-            if latest_version:
-                # 生成具体的下载链接格式：https://github.com/zhouchentao666/Fluent-Install/releases/download/{version}/FluentInstall.exe
-                download_url = f"https://github.com/{GITHUB_REPO}/releases/download/{latest_version}/FluentInstall.exe"
-                
-                if is_cn:
-                    # 中国大陆用户使用镜像
-                    mirror_urls = [
-                        f"https://gh-proxy.org/{download_url}",
-                        f"https://cdn.gh-proxy.org/{download_url}",
-                        f"https://edgeone.gh-proxy.org/{download_url}",
-                        f"https://ghp.ci/{download_url}",
-                    ]
-                    # 返回第一个镜像URL
-                    return mirror_urls[0]
-                else:
-                    # 非中国大陆用户使用原始链接
-                    return download_url
-            
-            # 如果没有版本号，使用原来的逻辑
-            if '/releases' in original_url and '/latest' not in original_url:
-                original_url = original_url.replace('/releases', '/releases/latest')
-            
-            if is_cn:
-                mirror_urls = [
-                    f"https://gh-proxy.org/{original_url}",
-                    f"https://cdn.gh-proxy.org/{original_url}",
-                    f"https://edgeone.gh-proxy.org/{original_url}",
-                    f"https://ghp.ci/{original_url}",
-                ]
-                return mirror_urls[0]
-            else:
-                return original_url
-                
-        except Exception:
-            return original_url
 
     def show_thanks(self):
         """显示鸣谢对话框"""
@@ -6757,194 +8969,216 @@ class SettingsPage(ScrollArea):
             else:
                 from backend.cai_backend import DEFAULT_CONFIG
                 config = DEFAULT_CONFIG.copy()
-            self.on_config_loaded(config)
+            # 使用 QTimer 延迟调用，避免Nuitka编译后的信号问题
+            QTimer.singleShot(0, lambda: self.on_config_loaded(config))
         except Exception as e:
-            self.on_load_error(str(e))
+            import traceback
+            error_msg = f"{str(e)}\n{traceback.format_exc()}"
+            # 使用 QTimer 延迟调用，避免Nuitka编译后的信号问题
+            QTimer.singleShot(0, lambda: self.on_load_error(error_msg))
     
-    @pyqtSlot(object)
     def on_config_loaded(self, config):
         """配置加载完成"""
-        if config:
-            # 获取主设置卡片
-            settings_card = self.findChild(SettinsCard)
-            if settings_card:
-                settings_card.steam_path_edit.setText(config.get("Custom_Steam_Path", ""))
-                settings_card.token_edit.setText(config.get("Github_Personal_Token", ""))
-                settings_card.manifest_api_key_edit.setText(config.get("ManifestAPIKey", ""))
-            
-            # 加载应用程序配置
-            if self.debug_check:
-                new_val = config.get("debug_mode", False)
-                if self.debug_check.isChecked() != new_val:
-                    try:
-                        self.debug_check.checkedChanged.disconnect(self._on_setting_changed)
-                    except:
-                        pass
-                    self.debug_check.setChecked(new_val)
-                    self.debug_check.checkedChanged.connect(self._on_setting_changed)
-            if self.logging_check:
-                new_val = config.get("logging_files", True)
-                if self.logging_check.isChecked() != new_val:
-                    try:
-                        self.logging_check.checkedChanged.disconnect(self._on_setting_changed)
-                    except:
-                        pass
-                    self.logging_check.setChecked(new_val)
-                    self.logging_check.checkedChanged.connect(self._on_setting_changed)
-            
-            # 加载解锁工具模式
-            if self.unlocker_combo:
-                force_unlocker = config.get("force_unlocker_type", "auto")
-                if force_unlocker == "steamtools":
-                    new_idx = 1
-                elif force_unlocker == "greenluma":
-                    new_idx = 2
-                else:
-                    new_idx = 0
-                if self.unlocker_combo.currentIndex() != new_idx:
-                    try:
-                        self.unlocker_combo.currentIndexChanged.disconnect(self._on_setting_changed)
-                    except:
-                        pass
-                    self.unlocker_combo.setCurrentIndex(new_idx)
-                    self.unlocker_combo.currentIndexChanged.connect(self._on_setting_changed)
-            
-            # 加载SteamTools版本模式设置
-            if self.st_mode_combo:
-                is_fixed = config.get("ST_Fixed_Version", True)  # 默认固定版本（与后端 DEFAULT_CONFIG 保持一致）
-                new_index = 1 if is_fixed else 0
-                # 只在需要改变时才设置，避免不必要的信号触发
-                if self.st_mode_combo.currentIndex() != new_index:
-                    # 临时断开信号，避免触发保存
-                    try:
-                        self.st_mode_combo.currentIndexChanged.disconnect(self._on_setting_changed)
-                    except:
-                        pass
-                    self.st_mode_combo.setCurrentIndex(new_index)
-                    # 重新连接信号
-                    self.st_mode_combo.currentIndexChanged.connect(self._on_setting_changed)
-            
-            # 加载固定版本manifest修复模式设置
-            if self.st_fixed_manifest_combo:
-                manifest_mode = config.get("ST_Fixed_Manifest_Mode", "ask")  # 默认询问
-                mode_map = {"always": 0, "never": 1, "ask": 2}
-                new_idx = mode_map.get(manifest_mode, 2)
-                if self.st_fixed_manifest_combo.currentIndex() != new_idx:
-                    try:
-                        self.st_fixed_manifest_combo.currentIndexChanged.disconnect(self._on_setting_changed)
-                    except:
-                        pass
-                    self.st_fixed_manifest_combo.setCurrentIndex(new_idx)
-                    self.st_fixed_manifest_combo.currentIndexChanged.connect(self._on_setting_changed)
-            
-            # 加载DLC超时时间
-            if self.dlc_timeout_spinbox:
-                self.dlc_timeout_spinbox.setValue(config.get("DLCTimeout", 60))
-
-            # 加载入库超时时间
-            if self.timeout_spinbox:
-                self.timeout_spinbox.setValue(config.get("download_timeout", 30))
-            
-            # 加载显示进度条选项
-            if self.show_progress_check:
-                new_val = config.get("show_progress_bar", True)
-                if self.show_progress_check.isChecked() != new_val:
-                    try:
-                        self.show_progress_check.checkedChanged.disconnect(self._on_setting_changed)
-                    except:
-                        pass
-                    self.show_progress_check.setChecked(new_val)
-                    self.show_progress_check.checkedChanged.connect(self._on_setting_changed)
-
-            # 加载语言设置
-            if self.lang_combo:
-                # 先断开信号连接，避免触发 on_language_changed
-                self.lang_combo.currentIndexChanged.disconnect(self.on_language_changed)
-                
-                lang = config.get("language", "system")
-                if lang == "system":
-                    # 检测系统语言
-                    system_locale = QLocale.system()
-                    if system_locale.language() == QLocale.Language.Chinese:
-                        self.lang_combo.setCurrentIndex(0)  # 系统默认，实际为中文
-                    else:
-                        self.lang_combo.setCurrentIndex(0)  # 系统默认，实际为英文
-                elif lang == "zh_CN":
-                    self.lang_combo.setCurrentIndex(1)
-                elif lang == "en_US":
-                    self.lang_combo.setCurrentIndex(2)
-                elif lang == "fr_FR":
-                    self.lang_combo.setCurrentIndex(3)
-                elif lang == "ru_RU":
-                    self.lang_combo.setCurrentIndex(4)
-                elif lang == "de_DE":
-                    self.lang_combo.setCurrentIndex(5)
-                elif lang == "ja_JP":
-                    self.lang_combo.setCurrentIndex(6)
-                elif lang == "zh_TW":
-                    self.lang_combo.setCurrentIndex(7)
-                else:
-                    self.lang_combo.setCurrentIndex(2)  # 默认英文
-                
+        if not config:
+            return
+        
+        # 获取主设置卡片
+        settings_card = self.findChild(SettinsCard)
+        if settings_card:
+            settings_card.steam_path_edit.setText(config.get("Custom_Steam_Path", ""))
+            settings_card.token_edit.setText(config.get("Github_Personal_Token", ""))
+            settings_card.manifest_api_key_edit.setText(config.get("ManifestAPIKey", ""))
+        
+        # 加载应用程序配置
+        if self.debug_check:
+            new_val = config.get("debug_mode", False)
+            if self.debug_check.isChecked() != new_val:
+                try:
+                    self.debug_check.checkedChanged.disconnect(self._on_setting_changed)
+                except:
+                    pass
+                self.debug_check.setChecked(new_val)
+                self.debug_check.checkedChanged.connect(self._on_setting_changed)
+        if self.logging_check:
+            new_val = config.get("logging_files", True)
+            if self.logging_check.isChecked() != new_val:
+                try:
+                    self.logging_check.checkedChanged.disconnect(self._on_setting_changed)
+                except:
+                    pass
+                self.logging_check.setChecked(new_val)
+                self.logging_check.checkedChanged.connect(self._on_setting_changed)
+        
+        # 加载解锁工具模式
+        if self.unlocker_combo:
+            force_unlocker = config.get("force_unlocker_type", "auto")
+            if force_unlocker == "steamtools":
+                new_idx = 1
+            elif force_unlocker == "greenluma":
+                new_idx = 2
+            elif force_unlocker == "opensteamtools":
+                new_idx = 3
+            else:
+                new_idx = 0
+            if self.unlocker_combo.currentIndex() != new_idx:
+                try:
+                    self.unlocker_combo.currentIndexChanged.disconnect(self._on_setting_changed)
+                except:
+                    pass
+                self.unlocker_combo.setCurrentIndex(new_idx)
+                self.unlocker_combo.currentIndexChanged.connect(self._on_setting_changed)
+        
+        # 加载SteamTools版本模式设置
+        if self.st_mode_combo:
+            is_fixed = config.get("ST_Fixed_Version", False)  # 默认自动更新
+            new_index = 1 if is_fixed else 0
+            # 只在需要改变时才设置，避免不必要的信号触发
+            if self.st_mode_combo.currentIndex() != new_index:
+                # 临时断开信号，避免触发保存
+                try:
+                    self.st_mode_combo.currentIndexChanged.disconnect(self._on_setting_changed)
+                except:
+                    pass
+                self.st_mode_combo.setCurrentIndex(new_index)
                 # 重新连接信号
-                self.lang_combo.currentIndexChanged.connect(self.on_language_changed)
+                self.st_mode_combo.currentIndexChanged.connect(self._on_setting_changed)
+        
+        # 加载固定版本manifest修复模式设置
+        if self.st_fixed_manifest_combo:
+            manifest_mode = config.get("ST_Fixed_Manifest_Mode", "ask")  # 默认询问
+            mode_map = {"always": 0, "never": 1, "ask": 2}
+            new_idx = mode_map.get(manifest_mode, 2)
+            if self.st_fixed_manifest_combo.currentIndex() != new_idx:
+                try:
+                    self.st_fixed_manifest_combo.currentIndexChanged.disconnect(self._on_setting_changed)
+                except:
+                    pass
+                self.st_fixed_manifest_combo.setCurrentIndex(new_idx)
+                self.st_fixed_manifest_combo.currentIndexChanged.connect(self._on_setting_changed)
+
+        # 加载DLC超时时间
+        if self.dlc_timeout_spinbox:
+            self.dlc_timeout_spinbox.setValue(config.get("DLCTimeout", 60))
+
+        # 加载入库超时时间
+        if self.timeout_spinbox:
+            self.timeout_spinbox.setValue(config.get("download_timeout", 30))
+        
+        # 加载显示进度条选项
+        if self.show_progress_check:
+            new_val = config.get("show_progress_bar", True)
+            if self.show_progress_check.isChecked() != new_val:
+                try:
+                    self.show_progress_check.checkedChanged.disconnect(self._on_setting_changed)
+                except:
+                    pass
+                self.show_progress_check.setChecked(new_val)
+                self.show_progress_check.checkedChanged.connect(self._on_setting_changed)
+
+        # 加载语言设置
+        if self.lang_combo:
+            # 先断开信号连接，避免触发 on_language_changed
+            self.lang_combo.currentIndexChanged.disconnect(self.on_language_changed)
             
-            # 加载主题模式设置
-            if self.theme_combo:
-                theme_mode = config.get("theme_mode", "auto")
-                if theme_mode == "light":
-                    self.theme_combo.setCurrentIndex(0)
-                elif theme_mode == "dark":
-                    self.theme_combo.setCurrentIndex(1)
+            lang = config.get("language", "system")
+            if lang == "system":
+                # 检测系统语言
+                system_locale = QLocale.system()
+                if system_locale.language() == QLocale.Language.Chinese:
+                    self.lang_combo.setCurrentIndex(0)  # 系统默认，实际为中文
                 else:
-                    self.theme_combo.setCurrentIndex(2)
+                    self.lang_combo.setCurrentIndex(0)  # 系统默认
+            elif lang == "zh_CN":
+                self.lang_combo.setCurrentIndex(1)
+            elif lang == "zh_TW":
+                self.lang_combo.setCurrentIndex(2)
+            elif lang == "en_US":
+                self.lang_combo.setCurrentIndex(3)
+            else:
+                self.lang_combo.setCurrentIndex(3)  # 默认英文
             
-            # 加载主题色设置
-            if self.color_combo:
-                theme_color = config.get("theme_color", "#0078d4")
-                color_map = {
-                    "#0078d4": 0,
-                    "#9b4dca": 1,
-                    "#10893e": 2,
-                    "#ff8c00": 3,
-                    "#e81123": 4,
-                    "#e3008c": 5
-                }
-                color_index = color_map.get(theme_color, 0)
-                self.color_combo.setCurrentIndex(color_index)
-            
-            # 加载默认界面设置
-            if self.default_page_combo:
-                default_page = config.get("default_page", "home")
-                page_map = {
-                    "home": 0,
-                    "search": 1
-                }
-                page_index = page_map.get(default_page, 0)
-                self.default_page_combo.setCurrentIndex(page_index)
-            
-            # 加载窗口特效设置
-            if self.effect_combo:
-                window_effect = config.get("window_effect", "mica")
-                effect_map = {
-                    "none": 0,
-                    "mica": 1
-                }
-                effect_index = effect_map.get(window_effect, 1)  # 默认为云母效果
-                self.effect_combo.setCurrentIndex(effect_index)
-                
-                # 应用窗口特效
-                if hasattr(self.window(), 'apply_window_effect'):
-                    self.window().apply_window_effect(window_effect)
-    
-    @pyqtSlot(str)
+            # 重新连接信号
+            self.lang_combo.currentIndexChanged.connect(self.on_language_changed)
+        
+        # 加载主题模式设置
+        if self.theme_combo:
+            theme_mode = config.get("theme_mode", "auto")
+            if theme_mode == "light":
+                self.theme_combo.setCurrentIndex(0)
+            elif theme_mode == "dark":
+                self.theme_combo.setCurrentIndex(1)
+            else:
+                self.theme_combo.setCurrentIndex(2)
+        
+        # 加载主题色设置
+        if self.color_combo:
+            theme_color = config.get("theme_color", "#0078d4")
+            color_map = {
+                "#0078d4": 0,
+                "#9b4dca": 1,
+                "#10893e": 2,
+                "#ff8c00": 3,
+                "#e81123": 4,
+                "#e3008c": 5
+            }
+            color_index = color_map.get(theme_color, 0)
+            self.color_combo.setCurrentIndex(color_index)
+        
+        # 加载默认界面设置
+        if self.default_page_combo:
+            default_page = config.get("default_page", "home")
+            page_map = {
+                "home": 0,
+                "search": 1
+            }
+            page_index = page_map.get(default_page, 0)
+            self.default_page_combo.setCurrentIndex(page_index)
+        
+        # 加载窗口特效设置
+        if self.effect_combo:
+            window_effect = config.get("window_effect", "mica")
+            effect_map = {
+                "none": 0,
+                "mica": 1
+            }
+            effect_index = effect_map.get(window_effect, 1)  # 默认为云母效果
+            self.effect_combo.setCurrentIndex(effect_index)
+
+        # 加载平滑滚动设置
+        if self.smooth_scroll_check:
+            smooth_scroll = config.get("smooth_scroll", True)  # 默认开启平滑滚动
+            # 先断开信号，避免触发保存
+            try:
+                self.smooth_scroll_check.checkedChanged.disconnect(self._on_smooth_scroll_changed)
+            except:
+                pass
+            self.smooth_scroll_check.setChecked(smooth_scroll)
+            # 信号将在 _setup_auto_save_listeners 中重新连接
+
+        # 应用窗口特效
+        window_effect = config.get("window_effect", "mica")
+        try:
+            main_window = self.window()
+            if main_window and hasattr(main_window, 'apply_window_effect'):
+                main_window.apply_window_effect(window_effect)
+        except Exception as e:
+            print(f"应用窗口特效失败: {e}")
+
+        # 加载自定义仓库配置
+        if self.custom_repos_card:
+            custom_repos = config.get("Custom_Repos", {"github": [], "zip": []})
+            github_repos = custom_repos.get("github", [])
+            zip_repos = custom_repos.get("zip", [])
+            self.custom_repos_card.set_repos(github_repos, zip_repos)
+
     def on_load_error(self, error):
         """加载失败"""
         InfoBar.error(
-                title=tr("load_config_failed"),
-                content=error,
+            title=tr("load_config_failed"),
+            content=str(error),
             parent=self,
-            position=InfoBarPosition.TOP
+            position=InfoBarPosition.TOP,
+            duration=3000
         )
     
     def save_settings(self):
@@ -6976,7 +9210,7 @@ class SettingsPage(ScrollArea):
             
             # 保存解锁工具模式
             if self.unlocker_combo:
-                unlocker_map = {0: "auto", 1: "steamtools", 2: "greenluma"}
+                unlocker_map = {0: "auto", 1: "steamtools", 2: "greenluma", 3: "opensteamtools"}
                 config["force_unlocker_type"] = unlocker_map.get(self.unlocker_combo.currentIndex(), "auto")
             
             # 保存SteamTools版本模式设置
@@ -6987,7 +9221,7 @@ class SettingsPage(ScrollArea):
             if self.st_fixed_manifest_combo:
                 mode_map = {0: "always", 1: "never", 2: "ask"}
                 config["ST_Fixed_Manifest_Mode"] = mode_map.get(self.st_fixed_manifest_combo.currentIndex(), "ask")
-            
+
             # 保存DLC超时时间
             if self.dlc_timeout_spinbox:
                 dlc_timeout = self.dlc_timeout_spinbox.value()
@@ -7019,14 +9253,26 @@ class SettingsPage(ScrollArea):
                 config["default_page"] = page_map.get(self.default_page_combo.currentIndex(), "home")
             
             # 保存语言（已经在 on_language_changed 中保存了，这里也保存一次以防万一）
-            lang_map = {0: "system", 1: "zh_CN", 2: "en_US", 3: "fr_FR", 4: "ru_RU", 5: "de_DE", 6: "ja_JP", 7: "zh_TW"}
+            lang_map = {0: "system", 1: "zh_CN", 2: "zh_TW", 3: "en_US"}
             config["language"] = lang_map.get(self.lang_combo.currentIndex(), "system")
             
             # 保存窗口特效
             if self.effect_combo:
                 effect_map = {0: "none", 1: "mica"}
                 config["window_effect"] = effect_map.get(self.effect_combo.currentIndex(), "none")
-            
+
+            # 保存平滑滚动设置
+            if self.smooth_scroll_check:
+                config["smooth_scroll"] = self.smooth_scroll_check.isChecked()
+
+            # 保存自定义仓库配置
+            if self.custom_repos_card:
+                github_repos, zip_repos = self.custom_repos_card.get_repos()
+                config["Custom_Repos"] = {
+                    "github": github_repos,
+                    "zip": zip_repos
+                }
+
             # 保存配置
             with open(config_path, 'w', encoding='utf-8') as f:
                 json.dump(config, f, indent=2, ensure_ascii=False)
@@ -7145,7 +9391,11 @@ class MainWindow(MSFluentWindow):
         self.search_page = SearchPage(self)
         self.launcher_page = LauncherPage(self)
         self.trainer_page = TrainerPage(self)
+        self.drm_page = DrmPage(self)
         self.settings_page = SettingsPage(self)
+
+        # 连接设置页面的自定义仓库变化信号到搜索页面的刷新方法
+        self.settings_page.custom_repos_changed.connect(self.search_page.refresh_manifest_source_combo)
 
         # 添加导航项
         self.addSubInterface(
@@ -7173,6 +9423,13 @@ class MainWindow(MSFluentWindow):
             self.trainer_page,
             FluentIcon.LIBRARY,
             tr("trainer_nav")
+        )
+
+        # 添加D加密
+        self.addSubInterface(
+            self.drm_page,
+            FluentIcon.CERTIFICATE,
+            tr("drm_nav")
         )
 
         # 在导航栏底部添加设置
@@ -7204,13 +9461,69 @@ class MainWindow(MSFluentWindow):
             }
         """)
 
+        # 应用平滑滚动设置
+        self.update_smooth_scroll_for_all_pages()
+
         # 根据配置切换到默认界面
         self.switch_to_default_page()
 
         # 启动后台预构建设置页 UI，避免首次点击卡顿
         from PyQt6.QtCore import QTimer
         QTimer.singleShot(1500, self._prebuild_settings)
-    
+
+        # 启动时检测内核（延迟1秒，避免影响界面加载速度）
+        QTimer.singleShot(1000, self._check_kernel_on_startup)
+
+        # 启动时自动检查更新（延迟3秒，避免影响界面加载速度）
+        QTimer.singleShot(3000, self._check_update_on_startup)
+
+    def _get_mirror_download_url(self, original_url: str, latest_version: str = "") -> str:
+        """
+        获取镜像化的下载链接，中国大陆用户自动跳转镜像
+        优化：直接跳转到具体的下载链接而不是发布页面
+        """
+        # 检查当前是否在中国大陆
+        try:
+            import os
+            is_cn = os.environ.get('IS_CN', '').lower() == 'yes'
+
+            # 如果有版本号，直接生成下载链接
+            if latest_version:
+                # 生成具体的下载链接格式：https://github.com/zhouchentao666/Fluent-Install/releases/download/{version}/FluentInstall-v{version}.zip
+                download_url = f"https://github.com/{GITHUB_REPO}/releases/download/{latest_version}/FluentInstall-v{latest_version}.zip"
+
+                if is_cn:
+                    # 中国大陆用户使用镜像
+                    mirror_urls = [
+                        f"https://gh-proxy.org/{download_url}",
+                        f"https://cdn.gh-proxy.org/{download_url}",
+                        f"https://edgeone.gh-proxy.org/{download_url}",
+                        f"https://ghp.ci/{download_url}",
+                    ]
+                    # 返回第一个镜像URL
+                    return mirror_urls[0]
+                else:
+                    # 非中国大陆用户使用原始链接
+                    return download_url
+
+            # 如果没有版本号，使用原来的逻辑
+            if '/releases' in original_url and '/latest' not in original_url:
+                original_url = original_url.replace('/releases', '/releases/latest')
+
+            if is_cn:
+                mirror_urls = [
+                    f"https://gh-proxy.org/{original_url}",
+                    f"https://cdn.gh-proxy.org/{original_url}",
+                    f"https://edgeone.gh-proxy.org/{original_url}",
+                    f"https://ghp.ci/{original_url}",
+                ]
+                return mirror_urls[0]
+            else:
+                return original_url
+
+        except Exception:
+            return original_url
+
     def switch_to_default_page(self):
         """切换到默认界面"""
         try:
@@ -7233,6 +9546,33 @@ class MainWindow(MSFluentWindow):
             # 出错时默认显示主页
             self.switchTo(self.home_page)
 
+    def _check_kernel_on_startup(self):
+        """启动时检测内核"""
+        async def _check():
+            from backend.cai_backend import CaiBackend
+            async with CaiBackend() as backend:
+                # 检测内核
+                unlocker_type = await backend.initialize()
+                return unlocker_type
+
+        self._kernel_check_worker = AsyncWorker(_check())
+
+        def on_result(result):
+            self._kernel_check_worker = None
+            if not result:
+                # 未检测到内核，显示对话框
+                steam_path = self.settings_page.steam_path_edit.text() if hasattr(self.settings_page, 'steam_path_edit') else ""
+                dialog = NoKernelDialog(steam_path, self)
+                dialog.exec()
+
+        def on_error(error):
+            self._kernel_check_worker = None
+
+        self._kernel_check_worker.result_ready.connect(on_result)
+        self._kernel_check_worker.error.connect(on_error)
+        self._kernel_check_worker.finished.connect(self._kernel_check_worker.deleteLater)
+        self._kernel_check_worker.start()
+
     def _prebuild_settings(self):
         """应用启动后预构建设置页 UI 并预加载配置，消除首次点击卡顿"""
         if not self.settings_page._ui_built:
@@ -7242,20 +9582,292 @@ class MainWindow(MSFluentWindow):
             self.settings_page._config_loaded = True
             self.settings_page.load_config()
             self.settings_page._setup_auto_save_listeners()
-    
+
+    def _check_update_on_startup(self):
+        """启动时自动检查更新（静默模式，只有发现更新时才提示）"""
+        async def _check():
+            async with CaiBackend() as backend:
+                has_update, info = await backend.check_for_updates()
+                return has_update, info
+
+        # 使用类属性保存 worker，避免被垃圾回收
+        self._startup_update_worker = AsyncWorker(_check())
+
+        def on_result(result):
+            has_update, info = result
+            if has_update:
+                # 发现更新，显示提示
+                msg = MessageBox(
+                    tr("update_available"),
+                    f"{tr('current_version')}: {info.get('current_version', '')}\n"
+                    f"{tr('latest_version')}: {info.get('latest_version', '')}\n\n"
+                    f"{info.get('release_body', '') or tr('no_release_notes')}",
+                    self
+                )
+                msg.yesButton.setText(tr("go_to_download"))
+                msg.cancelButton.setText(tr("cancel"))
+                if msg.exec():
+                    # 获取镜像化的下载链接
+                    download_url = self._get_mirror_download_url(
+                        info.get('release_url', f"https://github.com/{GITHUB_REPO}/releases"),
+                        info.get('latest_version', '')
+                    )
+                    QDesktopServices.openUrl(QUrl(download_url))
+            # 清理 worker 引用
+            self._startup_update_worker = None
+
+        def on_error(error):
+            # 检查更新失败时静默处理，不打扰用户
+            # 清理 worker 引用
+            self._startup_update_worker = None
+
+        self._startup_update_worker.result_ready.connect(on_result)
+        self._startup_update_worker.error.connect(on_error)
+        self._startup_update_worker.finished.connect(self._startup_update_worker.deleteLater)
+        self._startup_update_worker.start()
+
     def on_restart_steam(self):
-        """重启 Steam"""
-        dialog = MessageBox(
-            tr("restart_steam_confirm"),
-            tr("restart_steam_message"),
-            self
-        )
+        """重启 Steam（带账号切换功能）"""
+        # 创建自定义对话框
+        from qfluentwidgets import MessageBoxBase, BodyLabel, ListWidget, CheckBox, RoundMenu, Action, LineEdit
+        
+        class RestartSteamDialog(MessageBoxBase):
+            def __init__(self, parent=None):
+                super().__init__(parent)
+                self.parent_window = parent
+                self.titleLabel = TitleLabel(tr("restart_steam_confirm"), self)
+                self.bodyLabel = BodyLabel(tr("restart_steam_select_account"), self)
+                
+                # 账号列表
+                self.account_list = ListWidget(self)
+                self.account_list.setFixedHeight(150)
+                self.account_list.setFrameShape(self.account_list.Shape.NoFrame)
+                self.account_list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+                self.account_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+                
+                # 加载账号备注
+                self.account_notes = {}
+                self._load_notes()
+                
+                # 加载账号列表
+                self.accounts = []
+                self.account_map = {}  # 用于存储显示文本到账号的映射
+                self._refresh_account_list()
+                
+                # 设置右键菜单
+                self.account_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+                self.account_list.customContextMenuRequested.connect(self._show_context_menu)
+                
+                # 离线模式选项
+                self.offline_checkbox = CheckBox(tr("offline_mode"), self)
+                
+                self.viewLayout.addWidget(self.titleLabel)
+                self.viewLayout.addWidget(self.bodyLabel)
+                self.viewLayout.addWidget(self.account_list)
+                self.viewLayout.addWidget(self.offline_checkbox)
+                
+                self.yesButton.setText(tr("confirm"))
+                self.cancelButton.setText(tr("cancel"))
+                self.widget.setMinimumWidth(380)
+            
+            def _load_notes(self):
+                """加载账号备注"""
+                try:
+                    notes_path = APP_ROOT / 'config' / 'account_notes.json'
+                    if notes_path.exists():
+                        with open(notes_path, 'r', encoding='utf-8') as f:
+                            self.account_notes = json.load(f)
+                except Exception as e:
+                    print(f"加载备注失败: {e}")
+                    self.account_notes = {}
+            
+            def _save_notes(self):
+                """保存账号备注"""
+                try:
+                    notes_path = APP_ROOT / 'config' / 'account_notes.json'
+                    notes_path.parent.mkdir(parents=True, exist_ok=True)
+                    with open(notes_path, 'w', encoding='utf-8') as f:
+                        json.dump(self.account_notes, f, ensure_ascii=False, indent=2)
+                except Exception as e:
+                    print(f"保存备注失败: {e}")
+            
+            def _refresh_account_list(self):
+                """刷新账号列表"""
+                self.account_list.clear()
+                self.account_map.clear()
+                self.accounts = []
+                
+                try:
+                    from backend.steam_account_manager import SteamAccountManager
+                    manager = SteamAccountManager()
+                    self.accounts = manager.get_steam_accounts()
+                    
+                    # 添加"不切换账号"选项
+                    self.account_list.addItem(tr("restart_steam_no_switch"))
+                    self.account_map[0] = ""
+                    
+                    for idx, acc in enumerate(self.accounts, start=1):
+                        account = acc['account']
+                        note = self.account_notes.get(account, "")
+                        display_text = f"{acc['persona_name'] or account} ({account})"
+                        if note:
+                            display_text += f" [{note}]"
+                        if acc.get('remember_password'):
+                            display_text += " [自动登录]"
+                        if acc.get('most_recent'):
+                            display_text += " [当前]"
+                        self.account_list.addItem(display_text)
+                        self.account_map[idx] = account
+                    
+                    # 默认选中第一项（不切换）
+                    self.account_list.setCurrentRow(0)
+                except Exception as e:
+                    print(f"加载账号列表失败: {e}")
+                    self.account_list.addItem(tr("restart_steam_no_switch"))
+                    self.account_map[0] = ""
+            
+            def _show_context_menu(self, pos):
+                """显示右键菜单"""
+                # 根据鼠标位置获取对应的项
+                item = self.account_list.itemAt(pos)
+                if not item:
+                    return
+                
+                row = self.account_list.row(item)
+                if row <= 0 or row not in self.account_map:
+                    return
+                
+                account = self.account_map.get(row)
+                if not account:
+                    return
+                
+                # 选中当前项
+                self.account_list.setCurrentRow(row)
+                
+                menu = RoundMenu("", self)
+                
+                # 编辑备注
+                note_action = Action(FluentIcon.EDIT, tr("edit_note"))
+                note_action.triggered.connect(lambda: self._edit_note(account))
+                menu.addAction(note_action)
+                
+                # 删除账号
+                delete_action = Action(FluentIcon.DELETE, tr("delete_account"))
+                delete_action.triggered.connect(lambda: self._delete_account(account))
+                menu.addAction(delete_action)
+                
+                menu.exec(self.account_list.mapToGlobal(pos))
+            
+            def _edit_note(self, account):
+                """编辑备注"""
+                class NoteDialog(MessageBoxBase):
+                    def __init__(self, current_note, parent=None):
+                        super().__init__(parent)
+                        self.titleLabel = TitleLabel(tr("edit_note_title"), self)
+                        self.bodyLabel = BodyLabel(tr("edit_note_message"), self)
+                        
+                        self.noteInput = LineEdit(self)
+                        self.noteInput.setText(current_note)
+                        self.noteInput.setPlaceholderText(tr("note_placeholder"))
+                        self.noteInput.setMinimumWidth(300)
+                        
+                        self.viewLayout.addWidget(self.titleLabel)
+                        self.viewLayout.addWidget(self.bodyLabel)
+                        self.viewLayout.addWidget(self.noteInput)
+                        
+                        self.yesButton.setText(tr("save"))
+                        self.cancelButton.setText(tr("cancel"))
+                        self.widget.setMinimumWidth(350)
+                    
+                    def get_note(self):
+                        return self.noteInput.text().strip()
+                
+                current_note = self.account_notes.get(account, "")
+                dialog = NoteDialog(current_note, self)
+                
+                if dialog.exec():
+                    new_note = dialog.get_note()
+                    self.account_notes[account] = new_note
+                    self._save_notes()
+                    self._refresh_account_list()
+                    if self.parent_window:
+                        InfoBar.success(
+                            title=tr("note_saved"),
+                            content=tr("note_saved_message"),
+                            parent=self.parent_window,
+                            position=InfoBarPosition.TOP
+                        )
+            
+            def _delete_account(self, account):
+                """删除账号"""
+                dialog = MessageBox(
+                    tr("confirm_delete_account"),
+                    tr("delete_account_message").format(account),
+                    self
+                )
+                
+                if dialog.exec():
+                    def on_complete(success):
+                        if success:
+                            # 同时删除备注
+                            if account in self.account_notes:
+                                del self.account_notes[account]
+                                self._save_notes()
+                            # 刷新列表
+                            self._refresh_account_list()
+                            if self.parent_window:
+                                InfoBar.success(
+                                    title=tr("delete_account_success"),
+                                    content=tr("delete_account_success_message"),
+                                    parent=self.parent_window,
+                                    position=InfoBarPosition.TOP
+                                )
+                        else:
+                            if self.parent_window:
+                                InfoBar.error(
+                                    title=tr("delete_account_failed"),
+                                    content=tr("delete_account_failed_message"),
+                                    parent=self.parent_window,
+                                    position=InfoBarPosition.TOP
+                                )
+                    
+                    def on_error(error):
+                        if self.parent_window:
+                            InfoBar.error(
+                                title=tr("delete_account_failed"),
+                                content=str(error),
+                                parent=self.parent_window,
+                                position=InfoBarPosition.TOP
+                            )
+                    
+                    self.delete_worker = SteamAccountDeleteWorker(account)
+                    self.delete_worker.result_ready.connect(on_complete)
+                    self.delete_worker.error.connect(on_error)
+                    self.delete_worker.finished.connect(self.delete_worker.deleteLater)
+                    self.delete_worker.start()
+            
+            def get_selected_account(self):
+                current_row = self.account_list.currentRow()
+                return self.account_map.get(current_row, "")
+            
+            def is_offline_mode(self):
+                return self.offline_checkbox.isChecked()
+        
+        dialog = RestartSteamDialog(self)
         
         if dialog.exec():
+            selected_account = dialog.get_selected_account()
+            offline_mode = dialog.is_offline_mode()
+            
             async def _restart():
                 async with CaiBackend() as backend:
                     await backend.initialize()
-                    success = backend.restart_steam()
+                    if selected_account:
+                        # 切换账号并重启
+                        success = backend.switch_steam_account(selected_account, offline=offline_mode)
+                    else:
+                        # 仅重启
+                        success = backend.restart_steam()
                     return success
 
             _replace_worker(getattr(self, 'restart_steam_worker', None))
@@ -7265,12 +9877,20 @@ class MainWindow(MSFluentWindow):
             self.restart_steam_worker.finished.connect(self.restart_steam_worker.deleteLater)
             self.restart_steam_worker.start()
             
-            InfoBar.info(
-                title=tr("restarting"),
-                content=tr("restarting_message"),
-                parent=self,
-                position=InfoBarPosition.TOP
-            )
+            if selected_account:
+                InfoBar.info(
+                    title=tr("switching_account"),
+                    content=f"{tr('switching_account_message')} -> {selected_account}",
+                    parent=self,
+                    position=InfoBarPosition.TOP
+                )
+            else:
+                InfoBar.info(
+                    title=tr("restarting"),
+                    content=tr("restarting_message"),
+                    parent=self,
+                    position=InfoBarPosition.TOP
+                )
     
     @pyqtSlot(object)
     def on_restart_complete(self, success):
@@ -7303,16 +9923,31 @@ class MainWindow(MSFluentWindow):
     def apply_window_effect(self, effect_type):
         """应用窗口特效"""
         import platform
+        import sys
         if platform.system() != 'Windows':
             return
-
+        
+        # 检查 Windows 版本，云母特效仅支持 Windows 11 (Build 22000+)
+        try:
+            win_ver = sys.getwindowsversion()
+            is_win11 = win_ver.major >= 10 and win_ver.build >= 22000
+        except:
+            is_win11 = False
+        
         if effect_type == "mica":
             # 启用云母特效（仅Windows 11）
-            self.setMicaEffectEnabled(True)
+            if is_win11:
+                try:
+                    self.setMicaEffectEnabled(True)
+                except Exception as e:
+                    print(f"启用云母特效失败: {e}")
             # 不设置全局透明背景，避免标题栏出现问题
         elif effect_type == "none":
             # 禁用特效
-            self.setMicaEffectEnabled(False)
+            try:
+                self.setMicaEffectEnabled(False)
+            except Exception as e:
+                print(f"禁用窗口特效失败: {e}")
         
         # 保存设置
         try:
@@ -7337,22 +9972,999 @@ class MainWindow(MSFluentWindow):
         # 通知所有页面更新主题
         pages = [
             self.home_page,
-            self.search_page, 
+            self.search_page,
             self.launcher_page,
             self.trainer_page,
+            self.drm_page,
             self.settings_page
         ]
-        
+
         for page in pages:
             if hasattr(page, 'notify_theme_changed'):
                 page.notify_theme_changed()
-        
+
         # 强制刷新所有页面布局
         for page in pages:
             if hasattr(page, 'update'):
                 page.update()
             if hasattr(page, 'repaint'):
                 page.repaint()
+
+    def update_smooth_scroll_for_all_pages(self, smooth_scroll=None):
+        """更新所有页面的平滑滚动设置
+        
+        Args:
+            smooth_scroll: 是否开启平滑滚动，None 时从配置读取
+        """
+        # 如果未传入参数，从配置读取
+        if smooth_scroll is None:
+            smooth_scroll = True  # 默认开启
+            try:
+                config_path = APP_ROOT / 'config' / 'config.json'
+                if config_path.exists():
+                    import json
+                    with open(config_path, 'r', encoding='utf-8') as f:
+                        config = json.load(f)
+                    smooth_scroll = config.get("smooth_scroll", True)
+            except Exception:
+                pass
+
+        # 更新所有页面的平滑滚动状态
+        pages = [
+            self.home_page,
+            self.search_page,
+            self.launcher_page,
+            self.trainer_page,
+            self.drm_page,
+            self.settings_page
+        ]
+
+        for page in pages:
+            # 直接使用 ScrollArea 的 setSmoothMode 方法
+            try:
+                print(f"[DEBUG] 设置页面 {page.objectName()} 平滑滚动: {smooth_scroll}")
+                if smooth_scroll:
+                    page.setSmoothMode(SmoothMode.COSINE, Qt.Orientation.Vertical)
+                    page.setSmoothMode(SmoothMode.COSINE, Qt.Orientation.Horizontal)
+                else:
+                    page.setSmoothMode(SmoothMode.NO_SMOOTH, Qt.Orientation.Vertical)
+                    page.setSmoothMode(SmoothMode.NO_SMOOTH, Qt.Orientation.Horizontal)
+                print(f"[DEBUG] 页面 {page.objectName()} 平滑滚动设置完成")
+            except Exception as e:
+                print(f"[DEBUG] 设置页面 {page.objectName()} 平滑滚动失败: {e}")
+
+
+class DownloadOSTWorker(QThread):
+    """下载 OpenSteamTools 工作线程"""
+    finished_sig = pyqtSignal(bool, str)
+
+    def __init__(self, steam_path, parent=None):
+        super().__init__(parent)
+        self.steam_path = steam_path
+
+    def run(self):
+        try:
+            import requests
+            import zipfile
+            import io
+            r = requests.get("https://gitee.com/pvzcxw/cai-install-support/releases/download/v1/OpenSteamTool.zip", timeout=30)
+            with zipfile.ZipFile(io.BytesIO(r.content)) as z:
+                for file_info in z.infolist():
+                    if file_info.filename.endswith('dwmapi.dll') or file_info.filename.endswith('OpenSteamTool.dll'):
+                        file_info.filename = os.path.basename(file_info.filename)
+                        z.extract(file_info, str(self.steam_path))
+            self.finished_sig.emit(True, "")
+        except Exception as e:
+            self.finished_sig.emit(False, str(e))
+
+
+class NoKernelDialog(MessageBoxBase):
+    """未检测到内核对话框"""
+    def __init__(self, steam_path, parent=None):
+        super().__init__(parent)
+        self.steam_path = steam_path
+        self.titleLabel = TitleLabel(tr("no_kernel_title"), self)
+        self.bodyLabel = BodyLabel(tr("no_kernel_msg"), self)
+
+        self.viewLayout.addWidget(self.titleLabel)
+        self.viewLayout.addWidget(self.bodyLabel)
+        self.viewLayout.addSpacing(10)
+
+        # OpenSteamTools
+        ost_layout = QHBoxLayout()
+        ost_layout.addWidget(BodyLabel(tr("ost_desc"), self))
+        ost_layout.addStretch(1)
+        self.btn_ost_auto = PrimaryPushButton(tr("auto_download"), self)
+        self.btn_ost_auto.clicked.connect(self.download_ost)
+        btn_ost_manual = PushButton(tr("manual_download"), self)
+        btn_ost_manual.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://github.com/OpenSteam001/OpenSteamTool/releases")))
+        ost_layout.addWidget(self.btn_ost_auto)
+        ost_layout.addWidget(btn_ost_manual)
+        self.viewLayout.addLayout(ost_layout)
+
+        # SteamTools
+        st_layout = QHBoxLayout()
+        st_layout.addWidget(BodyLabel(tr("st_desc"), self))
+        st_layout.addStretch(1)
+        self.btn_st_auto = PrimaryPushButton(tr("auto_download"), self)
+        self.btn_st_auto.clicked.connect(self.download_st)
+        btn_st_manual = PushButton(tr("manual_download"), self)
+        btn_st_manual.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://steamtools.net/")))
+        st_layout.addWidget(self.btn_st_auto)
+        st_layout.addWidget(btn_st_manual)
+        self.viewLayout.addLayout(st_layout)
+
+        # GreenLuma
+        gl_layout = QHBoxLayout()
+        gl_layout.addWidget(BodyLabel(tr("gl_desc"), self))
+        gl_layout.addStretch(1)
+        btn_gl_manual = PushButton(tr("manual_download"), self)
+        btn_gl_manual.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://cs.rin.ru/forum/viewtopic.php?f=29&t=103709")))
+        gl_layout.addWidget(btn_gl_manual)
+        self.viewLayout.addLayout(gl_layout)
+
+        self.viewLayout.addSpacing(10)
+        self.viewLayout.addWidget(BodyLabel(tr("force_kernel_select"), self))
+
+        # 强制选择
+        force_layout = QHBoxLayout()
+        self.force_combo = ComboBox(self)
+        self.force_combo.addItems(["OpenSteamTools", "SteamTools", "GreenLuma"])
+        force_layout.addWidget(self.force_combo)
+        btn_force = PushButton(tr("force_apply"), self)
+        btn_force.clicked.connect(self.apply_force)
+        force_layout.addWidget(btn_force)
+        self.viewLayout.addLayout(force_layout)
+
+        self.yesButton.hide()
+        self.cancelButton.setText(tr("cancel"))
+        self.widget.setMinimumWidth(550)
+
+    def download_ost(self):
+        self.btn_ost_auto.setEnabled(False)
+        self.btn_ost_auto.setText(tr("loading"))
+        self.worker = DownloadOSTWorker(self.steam_path, self)
+        self.worker.finished_sig.connect(self.on_ost_finished)
+        self.worker.start()
+
+    def on_ost_finished(self, success, error):
+        if success:
+            InfoBar.success(
+                title=tr("success"),
+                content="OpenSteamTools " + tr("install_success"),
+                parent=self.window(),
+                position=InfoBarPosition.TOP
+            )
+            self.accept()
+        else:
+            InfoBar.error(
+                title=tr("failed"),
+                content=f"{tr('download_failed')}: {error}",
+                parent=self.window(),
+                position=InfoBarPosition.TOP
+            )
+            self.btn_ost_auto.setEnabled(True)
+            self.btn_ost_auto.setText(tr("auto_download"))
+
+    def download_st(self):
+        try:
+            import subprocess
+            subprocess.Popen(["powershell", "-NoProfile", "-Command", "irm steam.run | iex"])
+            InfoBar.success(
+                title=tr("success"),
+                content="SteamTools " + tr("install_success"),
+                parent=self.window(),
+                position=InfoBarPosition.TOP
+            )
+            self.accept()
+        except Exception as e:
+            InfoBar.error(
+                title=tr("failed"),
+                content=f"{tr('launch_failed')}: {e}",
+                parent=self.window(),
+                position=InfoBarPosition.TOP
+            )
+
+    def apply_force(self):
+        sel = self.force_combo.currentText()
+        type_map = {"OpenSteamTools": "opensteamtools", "SteamTools": "steamtools", "GreenLuma": "greenluma"}
+        val = type_map.get(sel, "auto")
+
+        config_path = APP_ROOT / 'config' / 'config.json'
+        try:
+            import json
+            if config_path.exists():
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+            else:
+                config = {}
+            config["force_unlocker_type"] = val
+            with open(config_path, 'w', encoding='utf-8') as f:
+                json.dump(config, f, indent=2, ensure_ascii=False)
+            InfoBar.success(
+                title=tr("success"),
+                content=f"{tr('force_apply')} {sel}",
+                parent=self.window(),
+                position=InfoBarPosition.TOP
+            )
+            self.accept()
+        except Exception as e:
+            InfoBar.error(
+                title=tr("failed"),
+                content=f"{tr('save_failed')}: {e}",
+                parent=self.window(),
+                position=InfoBarPosition.TOP
+            )
+
+
+class GameInfoLoader(QThread):
+    """游戏信息加载线程"""
+    data_ready = pyqtSignal(dict)
+    error_occurred = pyqtSignal(str)
+
+    def __init__(self, appid, parent=None):
+        super().__init__(parent)
+        self.appid = appid
+
+    def run(self):
+        import asyncio
+        import httpx
+        from backend.cai_backend import get_steam_lang
+
+        async def fetch():
+            steam_lang = get_steam_lang(current_language)
+            cc = "TW" if current_language == "zh_TW" else ("US" if current_language == "en_US" else "CN")
+            url = f"https://store.steampowered.com/api/appdetails?appids={self.appid}&l={steam_lang}&cc={cc}"
+            client = httpx.AsyncClient()
+            try:
+                response = await client.get(url, timeout=30)
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get(self.appid, {}).get("success"):
+                        return data[self.appid]["data"]
+                return None
+            finally:
+                await client.aclose()
+
+        try:
+            result = asyncio.run(fetch())
+            if result:
+                self.data_ready.emit(result)
+            else:
+                self.error_occurred.emit("Failed to fetch game info")
+        except Exception as e:
+            self.error_occurred.emit(str(e))
+
+
+class SteamAccountDeleteWorker(QThread):
+    """Steam账号删除工作线程"""
+    result_ready = pyqtSignal(object)
+    error = pyqtSignal(str)
+
+    def __init__(self, account, parent=None):
+        super().__init__(parent)
+        self.account = account
+
+    def run(self):
+        import asyncio
+        from backend.cai_backend import CaiBackend
+
+        async def _delete():
+            backend = CaiBackend()
+            try:
+                await backend.initialize()
+                success = backend.delete_steam_account(self.account)
+                return success
+            finally:
+                await backend.close()
+
+        try:
+            result = asyncio.run(_delete())
+            self.result_ready.emit(result)
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+class GameDetailDialog(QDialog):
+    """游戏详情对话框 - 游戏盒子形式"""
+    
+    def __init__(self, appid: str, game_name: str, parent=None, source_type: str = None, mode: str = None):
+        super().__init__(parent)
+        self.appid = appid
+        self.game_name = game_name
+        self.source_type = source_type  # 'st' 或 'gl'，None 表示从搜索打开
+        self.mode = mode  # 'auto' 或 'fixed'
+        self.game_data = None
+        self.screenshots = []
+        self.current_screenshot = 0
+        self._screenshot_cache = {}  # 截图缓存: index -> pixmap
+        self._max_cache_size = 6  # 最多缓存6张截图（当前3张+预加载3张）
+
+        self.setWindowTitle(game_name if game_name else f"AppID: {appid}")
+        self.setMinimumSize(900, 700)
+        self.resize(1000, 750)
+
+        self.setup_ui()
+        self.load_game_info()
+    
+    def setup_ui(self):
+        """设置UI布局"""
+        # 根据主题设置样式
+        if isDarkTheme():
+            bg_color = "#1e1e1e"
+            text_color = "#ffffff"
+            top_bg = "#252525"
+            cover_bg = "#1a1a1a"
+            scroll_bg = "#2a2a2a"
+            scroll_handle = "#5a5a5a"
+            scroll_handle_hover = "#6a6a6a"
+        else:
+            bg_color = "#f5f5f5"
+            text_color = "#333333"
+            top_bg = "#ffffff"
+            cover_bg = "#e0e0e0"
+            scroll_bg = "#e0e0e0"
+            scroll_handle = "#c0c0c0"
+            scroll_handle_hover = "#a0a0a0"
+        
+        self.setStyleSheet(f"""
+            GameDetailDialog {{
+                background-color: {bg_color};
+            }}
+            QLabel {{
+                color: {text_color};
+            }}
+        """)
+        
+        self._text_color = text_color
+        self._top_bg = top_bg
+        self._cover_bg = cover_bg
+        
+        # 主布局
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+        
+        # 创建滚动区域
+        scroll = ScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setStyleSheet(f"""
+            ScrollArea {{
+                border: none;
+                background: transparent;
+            }}
+            QScrollBar:vertical {{
+                background: {scroll_bg};
+                width: 12px;
+                border-radius: 6px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {scroll_handle};
+                border-radius: 6px;
+                min-height: 30px;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background: {scroll_handle_hover};
+            }}
+        """)
+        
+        # 内容容器
+        content_widget = QWidget()
+        content_widget.setStyleSheet("background: transparent;")
+        content_layout = QVBoxLayout(content_widget)
+        content_layout.setContentsMargins(20, 20, 20, 20)
+        content_layout.setSpacing(20)
+        
+        # ===== 顶部区域：封面和基本信息 =====
+        top_widget = QWidget()
+        top_widget.setStyleSheet(f"background: {self._top_bg}; border-radius: 12px;")
+        top_layout = QHBoxLayout(top_widget)
+        top_layout.setContentsMargins(20, 20, 20, 20)
+        top_layout.setSpacing(20)
+        
+        # 左侧封面
+        self.cover_label = QLabel()
+        self.cover_label.setFixedSize(460, 215)
+        self.cover_label.setScaledContents(True)
+        self.cover_label.setStyleSheet(f"""
+            QLabel {{
+                border-radius: 8px;
+                background: {self._cover_bg};
+            }}
+        """)
+        # 加载封面
+        self.load_cover()
+        top_layout.addWidget(self.cover_label)
+        
+        # 右侧信息
+        info_layout = QVBoxLayout()
+        info_layout.setSpacing(12)
+        
+        # 根据主题设置标签颜色
+        secondary_color = "#a0a0a0" if isDarkTheme() else "#666666"
+        
+        # 游戏标题
+        self.title_label = TitleLabel(self.game_name if self.game_name else f"AppID: {self.appid}")
+        self.title_label.setWordWrap(True)
+        self.title_label.setStyleSheet(f"color: {self._text_color}; font-size: 24px; font-weight: bold;")
+        info_layout.addWidget(self.title_label)
+        
+        # 开发商和发行商
+        self.dev_label = BodyLabel(f"{tr('detail_developer')}: {tr('detail_loading')}")
+        self.dev_label.setStyleSheet(f"color: {secondary_color}; font-size: 13px;")
+        info_layout.addWidget(self.dev_label)
+        
+        self.pub_label = BodyLabel(f"{tr('detail_publisher')}: {tr('detail_loading')}")
+        self.pub_label.setStyleSheet(f"color: {secondary_color}; font-size: 13px;")
+        info_layout.addWidget(self.pub_label)
+        
+        # 发布日期
+        self.date_label = BodyLabel(f"{tr('detail_release_date')}: {tr('detail_loading')}")
+        self.date_label.setStyleSheet(f"color: {secondary_color}; font-size: 13px;")
+        info_layout.addWidget(self.date_label)
+        
+        # 价格
+        self.price_label = BodyLabel("")
+        self.price_label.setStyleSheet("color: #a4d007; font-size: 18px; font-weight: bold;")
+        info_layout.addWidget(self.price_label)
+        
+        # 平台支持
+        self.platform_label = BodyLabel("")
+        self.platform_label.setStyleSheet(f"color: {secondary_color}; font-size: 13px;")
+        info_layout.addWidget(self.platform_label)
+        
+        info_layout.addStretch()
+        
+        # 按钮行：根据来源显示不同按钮
+        btn_layout = QHBoxLayout()
+
+        if self.source_type == "st":
+            # SteamTools 模式：显示切换版本和删除按钮
+            # 切换版本按钮
+            toggle_text = tr("detail_switch_auto") if self.mode == "fixed" else tr("detail_switch_fixed")
+            self.toggle_btn = PrimaryPushButton(toggle_text)
+            self.toggle_btn.setIcon(FluentIcon.UPDATE)
+            self.toggle_btn.clicked.connect(self.toggle_version_mode)
+            btn_layout.addWidget(self.toggle_btn)
+            
+            btn_layout.addSpacing(10)
+            
+            # 删除按钮（仅图标）
+            self.delete_btn = TransparentToolButton(FluentIcon.DELETE)
+            self.delete_btn.setFixedSize(32, 32)
+            self.delete_btn.setToolTip(tr("detail_delete"))
+            self.delete_btn.installEventFilter(ToolTipFilter(self.delete_btn, showDelay=150, position=ToolTipPosition.TOP))
+            self.delete_btn.clicked.connect(self.delete_game)
+            btn_layout.addWidget(self.delete_btn)
+            
+        elif self.source_type == "gl":
+            # GreenLuma 模式：只显示删除按钮（仅图标）
+            self.delete_btn = TransparentToolButton(FluentIcon.DELETE)
+            self.delete_btn.setFixedSize(32, 32)
+            self.delete_btn.setToolTip(tr("detail_delete"))
+            self.delete_btn.installEventFilter(ToolTipFilter(self.delete_btn, showDelay=150, position=ToolTipPosition.TOP))
+            self.delete_btn.clicked.connect(self.delete_game)
+            btn_layout.addWidget(self.delete_btn)
+            
+        else:
+            # 搜索模式：显示入库按钮
+            self.add_btn = PrimaryPushButton(tr("detail_add_to_library"))
+            self.add_btn.setIcon(FluentIcon.CLOUD_DOWNLOAD)
+            self.add_btn.clicked.connect(self.add_to_library)
+            btn_layout.addWidget(self.add_btn)
+        
+        btn_layout.addSpacing(10)
+        
+        # Steam商店链接按钮
+        self.steam_btn = PushButton(tr("detail_view_store"))
+        self.steam_btn.setIcon(FluentIcon.LINK)
+        self.steam_btn.clicked.connect(self.open_steam_store)
+        btn_layout.addWidget(self.steam_btn)
+        
+        btn_layout.addStretch()
+        info_layout.addLayout(btn_layout)
+        
+        top_layout.addLayout(info_layout, 1)
+        content_layout.addWidget(top_widget)
+        
+        # 根据主题设置卡片背景色
+        card_bg = self._top_bg
+        inner_bg = self._cover_bg
+        
+        # ===== 截图轮播区域 =====
+        screenshot_widget = QWidget()
+        screenshot_widget.setStyleSheet(f"background: {card_bg}; border-radius: 12px;")
+        screenshot_layout = QVBoxLayout(screenshot_widget)
+        screenshot_layout.setContentsMargins(20, 20, 20, 20)
+        
+        screenshot_title = SubtitleLabel(tr("detail_screenshots"))
+        screenshot_title.setStyleSheet(f"color: {self._text_color}; font-size: 18px;")
+        screenshot_layout.addWidget(screenshot_title)
+        
+        # 截图显示区
+        self.screenshot_label = QLabel()
+        self.screenshot_label.setFixedSize(860, 484)
+        self.screenshot_label.setScaledContents(True)
+        self.screenshot_label.setStyleSheet(f"""
+            QLabel {{
+                border-radius: 8px;
+                background: {inner_bg};
+            }}
+        """)
+        self.screenshot_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        screenshot_layout.addWidget(self.screenshot_label, alignment=Qt.AlignmentFlag.AlignCenter)
+        
+        # 截图导航按钮
+        nav_layout = QHBoxLayout()
+        nav_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        self.prev_btn = PushButton(tr("detail_prev"))
+        self.prev_btn.setIcon(FluentIcon.LEFT_ARROW)
+        self.prev_btn.clicked.connect(self.show_prev_screenshot)
+        self.prev_btn.setEnabled(False)
+        
+        self.screenshot_counter = CaptionLabel("0 / 0")
+        self.screenshot_counter.setStyleSheet(f"color: {secondary_color};")
+        
+        self.next_btn = PushButton(tr("detail_next"))
+        self.next_btn.setIcon(FluentIcon.RIGHT_ARROW)
+        self.next_btn.clicked.connect(self.show_next_screenshot)
+        self.next_btn.setEnabled(False)
+        
+        nav_layout.addWidget(self.prev_btn)
+        nav_layout.addSpacing(20)
+        nav_layout.addWidget(self.screenshot_counter)
+        nav_layout.addSpacing(20)
+        nav_layout.addWidget(self.next_btn)
+        
+        screenshot_layout.addLayout(nav_layout)
+        content_layout.addWidget(screenshot_widget)
+        
+        # 根据主题设置文本编辑框样式
+        if isDarkTheme():
+            text_bg = "#1a1a1a"
+            text_color_edit = "#d0d0d0"
+        else:
+            text_bg = "#f0f0f0"
+            text_color_edit = "#333333"
+        
+        # ===== 游戏描述区域 =====
+        desc_widget = QWidget()
+        desc_widget.setStyleSheet(f"background: {card_bg}; border-radius: 12px;")
+        desc_layout = QVBoxLayout(desc_widget)
+        desc_layout.setContentsMargins(20, 20, 20, 20)
+        
+        desc_title = SubtitleLabel(tr("detail_about"))
+        desc_title.setStyleSheet(f"color: {self._text_color}; font-size: 18px;")
+        desc_layout.addWidget(desc_title)
+        
+        self.desc_text = TextEdit()
+        self.desc_text.setReadOnly(True)
+        self.desc_text.setMinimumHeight(200)
+        self.desc_text.setStyleSheet(f"""
+            TextEdit {{
+                background: {text_bg};
+                border: none;
+                border-radius: 8px;
+                color: {text_color_edit};
+                padding: 10px;
+                font-size: 14px;
+                line-height: 1.6;
+            }}
+        """)
+        self.desc_text.setText(tr("detail_loading"))
+        desc_layout.addWidget(self.desc_text)
+        
+        content_layout.addWidget(desc_widget)
+        
+        # ===== 系统需求区域 =====
+        req_widget = QWidget()
+        req_widget.setStyleSheet(f"background: {card_bg}; border-radius: 12px;")
+        req_layout = QVBoxLayout(req_widget)
+        req_layout.setContentsMargins(20, 20, 20, 20)
+        
+        req_title = SubtitleLabel(tr("detail_system_requirements"))
+        req_title.setStyleSheet(f"color: {self._text_color}; font-size: 18px;")
+        req_layout.addWidget(req_title)
+        
+        self.req_text = TextEdit()
+        self.req_text.setReadOnly(True)
+        self.req_text.setMinimumHeight(150)
+        self.req_text.setStyleSheet(f"""
+            TextEdit {{
+                background: {text_bg};
+                border: none;
+                border-radius: 8px;
+                color: {text_color_edit};
+                padding: 10px;
+                font-size: 13px;
+                line-height: 1.5;
+            }}
+        """)
+        self.req_text.setText(tr("detail_loading"))
+        req_layout.addWidget(self.req_text)
+        
+        content_layout.addWidget(req_widget)
+        
+        content_layout.addStretch()
+        
+        scroll.setWidget(content_widget)
+        main_layout.addWidget(scroll)
+        
+        # 关闭按钮
+        btn_layout = QHBoxLayout()
+        btn_layout.setContentsMargins(20, 10, 20, 20)
+        
+        close_btn = PrimaryPushButton(tr("detail_close"))
+        close_btn.setIcon(FluentIcon.CLOSE)
+        close_btn.clicked.connect(self.accept)
+        btn_layout.addStretch()
+        btn_layout.addWidget(close_btn)
+        
+        main_layout.addLayout(btn_layout)
+    
+    def load_cover(self):
+        """加载游戏封面"""
+        # 先尝试从缓存加载
+        cached_data = _get_cached_cover(self.appid)
+        if cached_data:
+            pixmap = QPixmap()
+            if pixmap.loadFromData(cached_data):
+                self.cover_label.setPixmap(pixmap)
+                return
+        
+        # 从网络加载
+        cover_url = f"https://cdn.akamai.steamstatic.com/steam/apps/{self.appid}/header.jpg"
+        
+        def on_cover_loaded(reply):
+            if reply.error() == QNetworkReply.NetworkError.NoError:
+                data = reply.readAll()
+                pixmap = QPixmap()
+                if pixmap.loadFromData(data):
+                    self.cover_label.setPixmap(pixmap)
+                    _cache_cover(self.appid, bytes(data))
+            reply.deleteLater()
+        
+        # 创建临时网络管理器
+        from PyQt6.QtNetwork import QNetworkAccessManager
+        nm = QNetworkAccessManager(self)
+        request = QNetworkRequest(QUrl(cover_url))
+        reply = nm.get(request)
+        reply.finished.connect(lambda: on_cover_loaded(reply))
+    
+    def load_game_info(self):
+        """加载游戏详细信息"""
+        def on_data_ready(data):
+            if data:
+                self.game_data = data
+                self.update_ui_with_data()
+
+        def on_error(error):
+            self.desc_text.setText(f"Load failed: {error}")
+            self.req_text.setText(tr("detail_no_requirements"))
+
+        # 使用独立的 GameInfoLoader 类
+        self.loader = GameInfoLoader(self.appid, self)
+        self.loader.data_ready.connect(on_data_ready)
+        self.loader.error_occurred.connect(on_error)
+        self.loader.start()
+    
+    def update_ui_with_data(self):
+        """使用获取的数据更新UI"""
+        data = self.game_data
+        
+        # 更新标题
+        name = data.get("name", self.game_name)
+        if name:
+            self.setWindowTitle(name)
+            self.title_label.setText(name)
+        
+        # 开发商和发行商
+        developers = data.get("developers", [])
+        publishers = data.get("publishers", [])
+        self.dev_label.setText(f"{tr('detail_developer')}: {', '.join(developers) if developers else tr('detail_unknown')}")
+        self.pub_label.setText(f"{tr('detail_publisher')}: {', '.join(publishers) if publishers else tr('detail_unknown')}")
+        
+        # 发布日期
+        release_date = data.get("release_date", {})
+        date_str = release_date.get("date", tr("detail_unknown"))
+        coming_soon = release_date.get("coming_soon", False)
+        if coming_soon:
+            date_str += f" ({tr('detail_coming_soon')})"
+        self.date_label.setText(f"{tr('detail_release_date')}: {date_str}")
+        
+        # 价格
+        price_data = data.get("price_overview", {})
+        if price_data:
+            final_price = price_data.get("final_formatted", "")
+            discount = price_data.get("discount_percent", 0)
+            if discount > 0:
+                self.price_label.setText(f"¥{final_price}  (-{discount}%)")
+            else:
+                self.price_label.setText(f"¥{final_price}" if final_price else tr("detail_free"))
+        elif data.get("is_free", False):
+            self.price_label.setText(tr("detail_free"))
+        else:
+            self.price_label.setText(tr("detail_price_unavailable"))
+        
+        # 平台支持
+        platforms = data.get("platforms", {})
+        platform_texts = []
+        if platforms.get("windows"):
+            platform_texts.append("Windows")
+        if platforms.get("mac"):
+            platform_texts.append("Mac")
+        if platforms.get("linux"):
+            platform_texts.append("Linux")
+        self.platform_label.setText(f"{tr('detail_platform')}: {', '.join(platform_texts) if platform_texts else tr('detail_unknown')}")
+        
+        # 描述
+        description = data.get("detailed_description", data.get("short_description", tr("detail_no_description")))
+        # 移除 HTML 标签
+        import re
+        description = re.sub(r'<[^>]+>', '', description)
+        description = description.replace('&quot;', '"').replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>')
+        self.desc_text.setText(description)
+        
+        # 系统需求
+        pc_requirements = data.get("pc_requirements", {})
+        if pc_requirements:
+            min_req = pc_requirements.get("minimum", "")
+            rec_req = pc_requirements.get("recommended", "")
+            req_text = ""
+            if min_req:
+                min_req = re.sub(r'<[^>]+>', '', min_req)
+                min_req = min_req.replace('&quot;', '"').replace('&amp;', '&')
+                req_text += f"【{tr('detail_min_requirements')}】\n{min_req}\n\n"
+            if rec_req:
+                rec_req = re.sub(r'<[^>]+>', '', rec_req)
+                rec_req = rec_req.replace('&quot;', '"').replace('&amp;', '&')
+                req_text += f"【{tr('detail_rec_requirements')}】\n{rec_req}"
+            self.req_text.setText(req_text if req_text else tr("detail_no_requirements"))
+        else:
+            self.req_text.setText(tr("detail_no_requirements"))
+        
+        # 截图
+        screenshots = data.get("screenshots", [])
+        if screenshots:
+            self.screenshots = screenshots[:10]  # 最多10张
+            self.current_screenshot = 0
+            self._screenshot_cache = {}  # 清空缓存
+            # 加载前3张截图
+            self.load_screenshot_batch(0, 3)
+            self.update_screenshot_counter()
+            self.prev_btn.setEnabled(len(self.screenshots) > 1)
+            self.next_btn.setEnabled(len(self.screenshots) > 1)
+        else:
+            self.screenshot_label.setText(tr("detail_no_screenshots"))
+            self.screenshot_counter.setText("0 / 0")
+
+    def load_screenshot_batch(self, start_index: int, count: int, direction: str = "forward"):
+        """批量加载截图
+        
+        Args:
+            start_index: 起始索引
+            count: 加载数量
+            direction: 'forward' 向后加载, 'backward' 向前加载, 'both' 双向加载
+        """
+        if not self.screenshots:
+            return
+
+        # 先显示当前索引的图片（如果已缓存）
+        if start_index in self._screenshot_cache:
+            self.screenshot_label.setPixmap(self._screenshot_cache[start_index])
+
+        indices_to_load = set()
+        n = len(self.screenshots)
+
+        if direction == "forward":
+            # 向后加载：当前及后面count-1张
+            for i in range(count):
+                idx = (start_index + i) % n
+                indices_to_load.add(idx)
+        elif direction == "backward":
+            # 向前加载：当前及前面count-1张
+            for i in range(count):
+                idx = (start_index - i) % n
+                indices_to_load.add(idx)
+        else:  # both
+            # 双向加载：前后各一半
+            half = count // 2
+            for i in range(half + 1):  # 当前及后面
+                idx = (start_index + i) % n
+                indices_to_load.add(idx)
+            for i in range(1, half + 1):  # 前面
+                idx = (start_index - i) % n
+                indices_to_load.add(idx)
+
+        # 加载所有需要加载的截图
+        for idx in indices_to_load:
+            if idx not in self._screenshot_cache:
+                self._load_single_screenshot(idx)
+
+    def _load_single_screenshot(self, index: int):
+        """加载单张截图到缓存"""
+        if not self.screenshots or index < 0 or index >= len(self.screenshots):
+            return
+
+        screenshot = self.screenshots[index]
+        image_url = screenshot.get("path_full", screenshot.get("path_thumbnail", ""))
+
+        if not image_url:
+            return
+
+        def on_image_loaded(reply, idx=index):
+            if reply.error() == QNetworkReply.NetworkError.NoError:
+                data = reply.readAll()
+                pixmap = QPixmap()
+                if pixmap.loadFromData(data):
+                    self._screenshot_cache[idx] = pixmap
+                    # 如果是当前显示的截图，更新显示
+                    if idx == self.current_screenshot:
+                        self.screenshot_label.setPixmap(pixmap)
+                    # 清理旧缓存
+                    self._cleanup_screenshot_cache()
+            reply.deleteLater()
+
+        from PyQt6.QtNetwork import QNetworkAccessManager
+        nm = QNetworkAccessManager(self)
+        request = QNetworkRequest(QUrl(image_url))
+        reply = nm.get(request)
+        reply.finished.connect(lambda: on_image_loaded(reply))
+
+    def _cleanup_screenshot_cache(self):
+        """清理截图缓存，只保留最近的6张"""
+        if len(self._screenshot_cache) > self._max_cache_size:
+            # 计算需要保留的索引范围（当前前后各3张）
+            keep_indices = set()
+            for offset in range(-2, 4):  # -2, -1, 0, 1, 2, 3
+                idx = (self.current_screenshot + offset) % len(self.screenshots)
+                keep_indices.add(idx)
+
+            # 删除不在保留范围内的缓存
+            keys_to_remove = [k for k in self._screenshot_cache.keys() if k not in keep_indices]
+            for k in keys_to_remove:
+                del self._screenshot_cache[k]
+    
+    def update_screenshot_counter(self):
+        """更新截图计数器"""
+        if self.screenshots:
+            self.screenshot_counter.setText(f"{self.current_screenshot + 1} / {len(self.screenshots)}")
+        else:
+            self.screenshot_counter.setText("0 / 0")
+    
+    def show_prev_screenshot(self):
+        """显示上一张截图"""
+        if self.screenshots:
+            n = len(self.screenshots)
+            self.current_screenshot = (self.current_screenshot - 1) % n
+            # 显示缓存中的图片（如果已加载）
+            if self.current_screenshot in self._screenshot_cache:
+                self.screenshot_label.setPixmap(self._screenshot_cache[self.current_screenshot])
+            else:
+                # 如果未缓存，加载当前及前面2张
+                self.load_screenshot_batch(self.current_screenshot, 3, direction="backward")
+            # 预加载再往前一张（例如翻到第2张时预加载第4张）
+            preload_idx = (self.current_screenshot - 2) % n
+            if preload_idx not in self._screenshot_cache:
+                self._load_single_screenshot(preload_idx)
+            self.update_screenshot_counter()
+
+    def show_next_screenshot(self):
+        """显示下一张截图"""
+        if self.screenshots:
+            n = len(self.screenshots)
+            self.current_screenshot = (self.current_screenshot + 1) % n
+            # 显示缓存中的图片（如果已加载）
+            if self.current_screenshot in self._screenshot_cache:
+                self.screenshot_label.setPixmap(self._screenshot_cache[self.current_screenshot])
+            else:
+                # 如果未缓存，加载当前及后面2张
+                self.load_screenshot_batch(self.current_screenshot, 3, direction="forward")
+            # 预加载再往后一张（例如翻到第3张时预加载第5张）
+            preload_idx = (self.current_screenshot + 2) % n
+            if preload_idx not in self._screenshot_cache:
+                self._load_single_screenshot(preload_idx)
+            self.update_screenshot_counter()
+    
+    def open_steam_store(self):
+        """打开 Steam 商店页面"""
+        url = f"https://store.steampowered.com/app/{self.appid}/"
+        QDesktopServices.openUrl(QUrl(url))
+
+    def add_to_library(self):
+        """将游戏入库"""
+        # 通过父窗口链查找主窗口
+        from qfluentwidgets import MSFluentWindow
+        main_window = None
+        parent = self.parent()
+        while parent:
+            if isinstance(parent, MSFluentWindow):
+                main_window = parent
+                break
+            parent = parent.parent()
+        
+        if main_window and hasattr(main_window, 'search_page'):
+            search_page = main_window.search_page
+            if hasattr(search_page, 'unlock_game_direct'):
+                # 调用入库方法
+                search_page.unlock_game_direct(self.appid, self.game_name)
+                InfoBar.success(
+                    title=tr("detail_add_started"),
+                    content=tr("detail_add_progress").format(self.game_name or self.appid),
+                    parent=self,
+                    position=InfoBarPosition.TOP,
+                    duration=3000
+                )
+                self.accept()  # 关闭对话框
+                return
+        
+        # 如果没找到合适的页面，显示错误
+        InfoBar.error(
+            title=tr("detail_add_failed"),
+            content=tr("detail_add_failed_msg"),
+            parent=self,
+            position=InfoBarPosition.TOP,
+            duration=3000
+        )
+
+    def toggle_version_mode(self):
+        """切换版本模式（自动更新/固定版本）"""
+        # 通过父窗口链查找主窗口
+        from qfluentwidgets import MSFluentWindow
+        main_window = None
+        parent = self.parent()
+        while parent:
+            if isinstance(parent, MSFluentWindow):
+                main_window = parent
+                break
+            parent = parent.parent()
+        
+        if main_window and hasattr(main_window, 'home_page'):
+            home_page = main_window.home_page
+            if hasattr(home_page, 'toggle_st_version'):
+                # 先关闭对话框，然后调用切换版本方法，让提示显示在主窗口上
+                filename = f"{self.appid}.lua"
+                self.accept()
+                home_page.toggle_st_version(filename, self.appid, None)
+                return
+        
+        InfoBar.error(
+            title=tr("detail_switch_failed"),
+            content=tr("detail_switch_failed_msg"),
+            parent=self,
+            position=InfoBarPosition.TOP,
+            duration=3000
+        )
+
+    def delete_game(self):
+        """删除游戏"""
+        # 通过父窗口链查找主窗口
+        from qfluentwidgets import MSFluentWindow
+        main_window = None
+        parent = self.parent()
+        while parent:
+            if isinstance(parent, MSFluentWindow):
+                main_window = parent
+                break
+            parent = parent.parent()
+        
+        if main_window and hasattr(main_window, 'home_page'):
+            home_page = main_window.home_page
+            if hasattr(home_page, 'delete_game_with_confirm'):
+                # 先关闭详情对话框，然后在主窗口显示确认删除对话框
+                self.accept()
+                home_page.delete_game_with_confirm(self.appid, self.source_type, self.game_name)
+                return
+        
+        InfoBar.error(
+            title=tr("detail_delete_failed"),
+            content=tr("detail_delete_failed_msg"),
+            parent=self,
+            position=InfoBarPosition.TOP,
+            duration=3000
+        )
 
 
 def main():

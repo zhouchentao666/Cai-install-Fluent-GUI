@@ -23,3 +23,9 @@ requests>=2.31.0      # HTTP请求，用于CW授权码下载
 cloudscraper>=1.2.71   # 绕过Cloudflare等反爬虫保护
 beautifulsoup4>=4.12.0  # HTML解析，用于修改器页面爬取
 rarfile>=4.0          # RAR文件解压
+
+# Steam客户端库（用于获取App信息和Depot）
+steam>=1.4.4          # python-steam，用于Steam客户端API调用
+gevent>=22.0.0        # steam模块依赖
+eventemitter>=0.2.0   # steam模块依赖
+protobuf==3.20.3      # steam模块依赖（必须使用3.20.x版本）
