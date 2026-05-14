@@ -2838,7 +2838,7 @@ class CaiBackend:
             return True
 
     def parse_lua_file_for_depots(self, lua_file_path: str) -> Dict:
-        addappid_pattern = re.compile(r'addappid\((\d+),\s*1,\s*"([^"]+)"\)')
+        addappid_pattern = re.compile(r'addappid\((\d+),\s*[01],\s*"([^"]+)"\)')
         depots = {}
         try:
             with open(lua_file_path, 'r', encoding='utf-8') as file:
